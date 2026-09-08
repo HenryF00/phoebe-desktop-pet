@@ -1,0 +1,158 @@
+{
+  "width": 1440,
+  "height": 1400,
+  "bodyHeight": 1228,
+  "clips": {
+    "idle": {
+      "label": "待机与眨眼",
+      "frames": [
+        "frames/master.png",
+        "frames/blink.png",
+        "frames/master.png"
+      ],
+      "durations": [
+        3.8,
+        0.15,
+        1.3
+      ]
+    },
+    "waving": {
+      "label": "挥手",
+      "frames": [
+        "frames/wave-a.png",
+        "frames/wave-b.png",
+        "frames/wave-a.png",
+        "frames/wave-b.png"
+      ],
+      "durations": [
+        0.25,
+        0.25,
+        0.25,
+        0.25
+      ]
+    },
+    "running-right": {
+      "label": "向右移动",
+      "frames": [
+        "frames/run-a.png",
+        "frames/run-b.png",
+        "frames/run-c2.png",
+        "frames/run-d.png"
+      ],
+      "durations": [
+        0.13,
+        0.13,
+        0.13,
+        0.13
+      ]
+    },
+    "running-left": {
+      "label": "向左移动",
+      "frames": [
+        "frames/left-run-a.png",
+        "frames/left-run-b.png",
+        "frames/left-run-c2.png",
+        "frames/left-run-d.png"
+      ],
+      "durations": [
+        0.13,
+        0.13,
+        0.13,
+        0.13
+      ]
+    },
+    "jumping": {
+      "label": "跳跃",
+      "frames": [
+        "frames/jump-crouch.png",
+        "frames/jump-air.png",
+        "frames/master.png"
+      ],
+      "durations": [
+        0.18,
+        0.32,
+        0.5
+      ]
+    },
+    "failed": {
+      "label": "失落",
+      "frames": [
+        "frames/failed-a.png",
+        "frames/failed-b.png"
+      ],
+      "durations": [
+        0.75,
+        0.75
+      ]
+    },
+    "waiting": {
+      "label": "等待",
+      "frames": [
+        "frames/waiting-a.png",
+        "frames/waiting-b.png"
+      ],
+      "durations": [
+        0.8,
+        0.8
+      ]
+    },
+    "running": {
+      "label": "思考工作",
+      "frames": [
+        "frames/working-a.png",
+        "frames/working-b.png"
+      ],
+      "durations": [
+        0.6,
+        0.6
+      ]
+    },
+    "review": {
+      "label": "查看结果",
+      "frames": [
+        "frames/review-a.png",
+        "frames/review-b.png"
+      ],
+      "durations": [
+        0.75,
+        0.75
+      ]
+    },
+    "look-0": {
+      "label": "向上看",
+      "frames": [
+        "frames/look-up.png"
+      ],
+      "durations": [
+        0.2
+      ]
+    },
+    "look-4": {
+      "label": "向右看",
+      "frames": [
+        "frames/look-right3.png"
+      ],
+      "durations": [
+        0.2
+      ]
+    },
+    "look-8": {
+      "label": "向下看",
+      "frames": [
+        "frames/look-down.png"
+      ],
+      "durations": [
+        0.2
+      ]
+    },
+    "look-12": {
+      "label": "向左看",
+      "frames": [
+        "frames/look-left.png"
+      ],
+      "durations": [
+        0.2
+      ]
+    }
+  }
+}

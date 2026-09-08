@@ -1,0 +1,10 @@
+{
+  "desktop_build": "pass",
+  "packaged_unique_frames_verified": 26,
+  "source_voice_files_sha256_verified": 67,
+  "python_syntax": "pass",
+  "unreviewed_reference_rejected": "pass",
+  "local_tts_synthesis": "not run: missing model/service and reviewed Japanese reference",
+  "training": "not started",
+  "remote_repository": "not created; local Git project"
+}

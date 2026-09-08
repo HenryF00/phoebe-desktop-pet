@@ -1,0 +1,9 @@
+Use case: identity-preserve
+Asset type: ONE SINGLE native-resolution full-body anime animation frame, waiting-b.
+Input images: Image 1 character-master.png is the character identity/anatomy/style master. Image 2 waiting-a.png is the DIRECT EDIT TARGET and exact pose, position, scale, shape and composition reference. Prioritize Image 2 for all body/clothing/hand/feet/camera invariants.
+Primary request: reproduce waiting-a EXACTLY, with ONLY a slight head tilt toward the OTHER side compared to waiting-a and a tiny half-closed blink. The expression remains subtly expectant, patiently awaiting response. Both eyes half closed (not fully shut), tiny soft smile preserved.
+Keep absolutely unchanged from Image 2: clasped hands at upper chest, fingers, wrists, forearms, elbow positions, torso and cape, hip/leg positions, exact foot placement, character height, cranium size, face shape, body/limb dimensions, camera and frame alignment. NO ARM CHANGES. This is the neighboring animation frame of the same waiting pose. The head tilt is only slight, never a large nod or turn.
+Preserve identical tall slender approx 5.5-head anatomy excluding hat, small head, blue fringe/twin braids, charcoal hat and cape with cream trim, cream tunic, brown belt/boots, dark leggings. Fully clothed. Fine clean cel-anime linework with restrained two-tone shading. Do not enlarge or round the head, shorten legs or make chibi.
+Composition: square native high-resolution image, only one complete full-height character, approximately 1150-1200px tall. Hat tip, cape, braids, hands and boots fully visible with 20px clear margins. Keep scale and foot baseline of waiting-a. No upscaling.
+Backdrop: uniform opaque solid pure MAGENTA #FF00FF. No gradient, shadow, checkerboard or simulated transparency.
+Avoid: props, staff, added symbols, text, readable marks, speed lines, motion effects, grid, additional figures, pixel style, changed arms, changed hands, cropped extremities.

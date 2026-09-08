@@ -1,0 +1,10 @@
+{
+  "character": "Roxy",
+  "language": "ja",
+  "backend": "gpt_sovits_api_v2",
+  "endpoint": "http://127.0.0.1:9880/tts",
+  "reference_audio": null,
+  "reference_text": null,
+  "reference_reviewed": false,
+  "status": "dataset_imported; model and reference transcription not configured"
+}
