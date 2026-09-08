@@ -43,11 +43,10 @@ python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
 - 生成耗时 / 音频时长，即 RTF。RTF < 1 表示总体生成快于播放，但仍需要测首音延迟和播放缓冲是否连续。
 - 长句稳定性、音色相似度、日语读音，以及取消时是否立即停止播音。
 
-完成这些验证后再将实时播放器接入桌宠。当前没有这些实测结果。
+完成这些验证后再将实时播放器接入桌宠。目前已测两次短句的整段生成耗时并采样进程内存，详见 [本地语音运行说明](local-tts.md)；首音延迟、长对话稳定性和打断尚未验证。
 
 ## 来源
 
 - GPT-SoVITS 官方项目与 Apple Silicon 安装说明：https://github.com/RVC-Boss/GPT-SoVITS
 - 官方合成接口：https://github.com/RVC-Boss/GPT-SoVITS/blob/main/api_v2.py
 - 本机 Amadeus：`../Amadeus/tts/backends/gpt_sovits.py`、`../Amadeus/local_tts_infer.py`、`../Amadeus/README.md`（相对于 Roxy 项目根目录）。
-

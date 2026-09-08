@@ -9,7 +9,9 @@ macOS 高清动漫桌宠，以及正在准备的洛琪希本地日语 AI 语音�
 - 已导入 `assets/voice/roxy_vad_8-10s/` 原始语音目录，包含 66 个 WAV 和原清单，约 10 分 7 秒。
 - 已准备音频体检、日文字幕核对表、参考音频配置工具和本地 GPT-SoVITS 合成探针。
 - 已安装 MLX Whisper，下载识别模型并在本机完成全部 66 段日语自动转写；字幕仍需回听校对。
-- **AI 语音尚未接通**：未选定已核对的参考音频，GPT-SoVITS 合成环境与权重尚未安装，未微调或生成 AI 语音。当前 App 仍是无语音桌宠。
+- 已安装 GPT-SoVITS v2ProPlus、CPU 推理环境与日语词典，并用参考音频生成了日语新台词。
+- 本机短句测试：首次请求 9.41 秒 / 2.96 秒音频；预热后 1.50 秒 / 3.08 秒音频。采样观察到服务进程内存峰值约 4.54 GiB。这不是首音延迟或长对话稳定性测试。
+- **音色尚未微调，桌宠尚未接入声音**：试听使用未校对 ASR 参考文本，正式参考音频配置仍待确认。当前 App 仍是无语音桌宠。
 
 这是在本机 `Documents/GitHub/Roxy` 创建的独立 Git 项目。
 
@@ -40,6 +42,12 @@ python3 scripts/build.py
 ## 已提供的工具
 
 ```sh
+# 启动本机 GPT-SoVITS 服务（保持此终端运行）
+python3 scripts/start_tts.py
+
+# 在另一终端生成未校对参考文本的试听；不修改正式音色配置
+python3 scripts/tts_probe.py --draft-reference roxy_seg_0012_0109646-0119212.wav --text 'こんにちは。今日も一緒に頑張りましょう。'
+
 # 本地自动转写；已有相同音频与模型的结果会跳过
 .venv/bin/python scripts/transcribe_voice.py
 
@@ -63,6 +71,8 @@ python3 scripts/tts_probe.py --text 'こんにちは。今日も一緒に頑張�
 ```
 
 探针输出 `generated/probe.wav` 和 `generated/probe.json`，测整段生成耗时、音频时长和实时率。它采用缓冲响应，不测首个可播放音频延迟，也不代表桌宠已经实现流式播放。
+
+指定 `--draft-reference` 时输出改为 `generated/draft-preview.wav` 和 `.json`，其中明确记录 `reference_reviewed=false`。本次已生成的首段试听另存为 `generated/draft-preview-cold.wav`。环境、来源与实测说明见 [本地语音运行说明](docs/local-tts.md)。
 
 ## 目录
 

@@ -1,0 +1,9 @@
+{
+  "source": "generated/draft-preview-cold.wav",
+  "requested_text": "こんにちは。今日も一緒に頑張りましょう。",
+  "recognized_text": "こんにちは。今日も一緒に頑張りましょう。",
+  "sample_rate_hz": 32000,
+  "channels": 1,
+  "sample_width_bytes": 2,
+  "note": "ASR content check only; voice similarity and naturalness require listening"
+}

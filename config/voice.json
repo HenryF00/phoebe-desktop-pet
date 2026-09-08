@@ -6,5 +6,5 @@
   "reference_audio": null,
   "reference_text": null,
   "reference_reviewed": false,
-  "status": "66 local Japanese ASR drafts prepared; review, TTS environment and weights pending; no fine-tuning or synthesis yet"
+  "status": "local v2ProPlus CPU synthesis verified; unreviewed draft preview generated; no fine-tuning or desktop voice integration"
 }

@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/RVC-Boss/GPT-SoVITS",
+  "revision": "48b1a0169a28582a8984402f82cf438d3bfa6aca",
+  "source_archive_sha256": "1c967e31777b2b88468af3e7481bcb770ac4d09dd854bdb9ee065d8c8c75fcb6",
+  "verified_git_blobs": 241,
+  "model_repository": "lj1995/GPT-SoVITS",
+  "model_revision": "336b2ec4e8d4ac74740798dd40af44e74659ecaf"
+}

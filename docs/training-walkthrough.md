@@ -2,6 +2,8 @@
 
 目标是让模型朗读新输入的日语文字。现有约 10 分钟素材用于参考音色和小样本微调，不从零训练通用语音大模型。是否像目标角色，必须通过试听判断。
 
+更新：本机的基础模型合成已跑通，安装状态、启动命令与两次短句测量见 [本地语音运行说明](local-tts.md)。下面的数据校对与微调步骤仍未完成。
+
 ## 1. 生成待校对字幕
 
 项目的 `.venv` 为 Apple Silicon 本地 ASR 环境，依赖版本保存在 `config/asr-requirements.lock`。所有命令从项目根目录执行：
@@ -22,7 +24,7 @@ cd /Users/ren/Documents/GitHub/Roxy
 
 基线候选为 GPT-SoVITS v2ProPlus。上游列有 Apple Silicon 路径；本机的版本兼容性、内存和速度必须通过运行确认。独立安装在 `vendor/GPT-SoVITS`，使用独立 Python 环境，避免与 MLX ASR 的 NumPy/PyTorch 版本混装。
 
-按 [GPT-SoVITS 官方安装说明](https://github.com/RVC-Boss/GPT-SoVITS#installation) 安装依赖和 FFmpeg。v2ProPlus 需要对应 SoVITS、GPT、HuBERT、BERT 和声纹权重；训练还需匹配的判别器权重。使用官方 `tts_infer.yaml` 的 v2ProPlus 配置为基础，将 `custom` 设为 CPU、`is_half: false` 并指向正确的本地权重。当前文档不是“模型已经安装”的声明。
+重建环境时按 [GPT-SoVITS 官方安装说明](https://github.com/RVC-Boss/GPT-SoVITS#installation) 安装依赖和 FFmpeg。v2ProPlus 需要对应 SoVITS、GPT、HuBERT、BERT 和声纹权重；训练还需匹配的判别器权重。本机已下载这些权重，启动脚本会生成 CPU、`is_half: false` 的 `custom` 配置并指向本地文件。
 
 挑一段已经校对的干净日语音频：
 

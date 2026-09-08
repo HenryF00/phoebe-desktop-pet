@@ -1,0 +1,51 @@
+{
+  "backend": "GPT-SoVITS v2ProPlus",
+  "device": "cpu",
+  "dtype": "float32",
+  "reference_reviewed": false,
+  "cold": {
+    "generation_seconds": 9.412343083065934,
+    "audio_seconds": 2.96,
+    "realtime_factor": 3.1798456361709238,
+    "text": "こんにちは。今日も一緒に頑張りましょう。",
+    "reference_audio": "assets/voice/roxy_vad_8-10s/roxy_seg_0012_0109646-0119212.wav",
+    "reference_text": "ちなみに私も魔族ですはいパウロさん達も私の姿を見て驚いてたでしょちっちゃくありません",
+    "reference_reviewed": false,
+    "seed": 42,
+    "audio_path": "/Users/ren/Documents/GitHub/Roxy/generated/draft-preview.wav",
+    "mode": "buffered; not a first-audio-latency or peak-memory measurement"
+  },
+  "warm": {
+    "generation_seconds": 1.500786165939644,
+    "audio_seconds": 3.08,
+    "realtime_factor": 0.4872682356946896,
+    "text": "こんにちは。今日も一緒に頑張りましょう。",
+    "reference_audio": "assets/voice/roxy_vad_8-10s/roxy_seg_0012_0109646-0119212.wav",
+    "reference_text": "ちなみに私も魔族ですはいパウロさん達も私の姿を見て驚いてたでしょちっちゃくありません",
+    "reference_reviewed": false,
+    "seed": 42,
+    "audio_path": "/Users/ren/Documents/GitHub/Roxy/generated/draft-preview.wav",
+    "mode": "buffered; not a first-audio-latency or peak-memory measurement"
+  },
+  "sampled_memory": {
+    "server_pid": 47796,
+    "rss_sample_interval_seconds": 0.2,
+    "observed_peak_rss_gib": 4.5411224365234375,
+    "note": "Sampled server resident memory, not total unified-memory usage or guaranteed instantaneous peak",
+    "probe_exit_code": 0
+  },
+  "first_audio_asr_check": {
+    "source": "generated/draft-preview-cold.wav",
+    "requested_text": "こんにちは。今日も一緒に頑張りましょう。",
+    "recognized_text": "こんにちは。今日も一緒に頑張りましょう。",
+    "sample_rate_hz": 32000,
+    "channels": 1,
+    "sample_width_bytes": 2,
+    "note": "ASR content check only; voice similarity and naturalness require listening"
+  },
+  "training": "not started",
+  "desktop_streaming_voice": "not integrated",
+  "source_and_model_versions": "config/tts-upstream.json",
+  "models_verified": 10,
+  "remote_repository": "not created"
+}
