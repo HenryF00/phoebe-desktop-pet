@@ -1,0 +1,14 @@
+[
+  {
+    "language": "zh",
+    "expected": "今天辛苦了，记得好好休息。",
+    "recognized": "今天辛苦了,记得好好休息",
+    "seconds": 3.649
+  },
+  {
+    "language": "en",
+    "expected": "You did well today. Take a little rest.",
+    "recognized": "You dip water there, take a little rest.",
+    "seconds": 2.52
+  }
+]

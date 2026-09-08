@@ -40,7 +40,8 @@ def main():
     env = os.environ.copy()
     env.update(HF_HOME=str(ROOT / 'models/huggingface'), HF_HUB_DISABLE_TELEMETRY='1',
                GRADIO_ANALYTICS_ENABLED='False', PYTHONUNBUFFERED='1',
-               OPEN_JTALK_DICT_DIR=str(dictionary))
+               OPEN_JTALK_DICT_DIR=str(dictionary),
+               NLTK_DATA=str(ROOT / "models/nltk_data"))
     env.setdefault('OMP_NUM_THREADS', '8')
     os.chdir(upstream)
     os.execve(python, [str(python), 'api_v2.py', '-a', '127.0.0.1', '-p', '9880', '-c', str(config)], env)

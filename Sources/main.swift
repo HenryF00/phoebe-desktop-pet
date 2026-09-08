@@ -32,6 +32,9 @@ final class PetView: NSView {
     var image: NSImage?
     var menuProvider: (() -> NSMenu)?
     var action: ((String) -> Void)?
+    var chatAction: (() -> Void)?
+    var settingsAction: (() -> Void)?
+    var clickTimer: Timer?
     var dragStart: NSPoint?
     var windowStart: NSPoint?
     var dragged = false
@@ -54,12 +57,13 @@ final class PetView: NSView {
     override func mouseDown(with event: NSEvent) {
         if event.modifierFlags.contains(.control) { rightMouseDown(with: event); return }
         dragStart = NSEvent.mouseLocation; windowStart = window?.frame.origin; dragged = false
-        if event.clickCount == 2 { action?("jumping") }
+        if event.clickCount == 2 { clickTimer?.invalidate(); clickTimer = nil }
     }
     override func mouseDragged(with event: NSEvent) {
         guard let start = dragStart, let origin = windowStart else { return }
         let point = NSEvent.mouseLocation
         if abs(point.x - start.x) + abs(point.y - start.y) > 4 {
+            clickTimer?.invalidate(); clickTimer = nil
             dragged = true
             if let window = window {
                 let proposed = NSRect(origin: NSPoint(x: origin.x + point.x - start.x, y: origin.y + point.y - start.y), size: window.frame.size)
@@ -69,8 +73,14 @@ final class PetView: NSView {
         }
     }
     override func mouseUp(with event: NSEvent) {
-        if dragged { action?("idle") }
-        else if event.clickCount == 1 { action?("waving") }
+        if dragged { clickTimer?.invalidate(); action?("idle") }
+        else if event.clickCount == 2 { clickTimer?.invalidate(); settingsAction?() }
+        else if event.clickCount == 1 {
+            clickTimer?.invalidate()
+            clickTimer = Timer.scheduledTimer(withTimeInterval:NSEvent.doubleClickInterval,repeats:false) { [weak self] _ in
+                self?.action?("waving"); self?.chatAction?()
+            }
+        }
         dragStart = nil; windowStart = nil
     }
     override func rightMouseDown(with event: NSEvent) {
@@ -101,6 +111,7 @@ final class PetController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var gazeCandidate = ""
     var gazeCandidateSince = 0.0
     var lastStateChange = 0.0
+    var voice: VoiceController?
     var followCodex = true
     var codexState: String?
     var codexLabel = "尚未收到 Codex 事件"
@@ -110,6 +121,9 @@ final class PetController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let settings = UserDefaults.standard
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let i = CommandLine.arguments.firstIndex(of: "--render-chat-qa"), CommandLine.arguments.count > i + 1 {
+            setupVoice(startWorker: false); voice?.renderQA(CommandLine.arguments[i + 1]); NSApp.terminate(nil); return
+        }
         if NSRunningApplication.runningApplications(withBundleIdentifier: "local.roxy.hd.pet").count > 1 {
             NSApp.terminate(nil); return
         }
@@ -142,6 +156,8 @@ final class PetController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pet.setAccessibilityElement(true)
         pet.setAccessibilityRole(.image)
         pet.menuProvider = { [weak self] in self?.makeMenu() ?? NSMenu() }
+        pet.settingsAction = { [weak self] in self?.voice?.showSettings() }
+        pet.chatAction = { [weak self] in self?.voice?.toggleChat() }
         pet.action = { [weak self] state in
             self?.manualUntil = ProcessInfo.processInfo.systemUptime + 4
             self?.select(state)
@@ -162,6 +178,8 @@ final class PetController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         panel.orderFrontRegardless()
+        setupVoice()
+        if CommandLine.arguments.contains("--show-chat") { voice?.show() }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = "Roxy HD"; refreshMenu(); redraw()
         let ticker = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in self?.tick() }
@@ -183,6 +201,7 @@ final class PetController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
     func tick() {
+        voice?.updateAnchor()
         let now = ProcessInfo.processInfo.systemUptime
         let delta = min(now - previousTime, 0.12); previousTime = now
         if now - lastCodexPoll > 1 { lastCodexPoll = now; pollCodex() }
@@ -254,6 +273,14 @@ final class PetController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let auto = item("自动互动与视线跟随", #selector(toggleAutomatic)); auto.state = automatic ? .on : .off; menu.addItem(auto)
         let follow = item("跟随 Codex 任务", #selector(toggleCodex)); follow.state = followCodex ? .on : .off; menu.addItem(follow)
         let connection = NSMenuItem(title: codexLabel, action: nil, keyEquivalent: ""); connection.isEnabled = false; menu.addItem(connection)
+        menu.addItem(.separator())
+        menu.addItem(item("与洛琪希聊天…", #selector(showChat)))
+        menu.addItem(item("聊天与声音设置…", #selector(showVoiceSettings)))
+        menu.addItem(item("查看聊天记录…", #selector(showChatHistory)))
+        let speech = item("任务语音播报", #selector(toggleVoiceNotifications))
+        speech.state = voice?.notificationEnabled == true ? .on : .off; menu.addItem(speech)
+        menu.addItem(item("停止说话", #selector(stopVoice)))
+        menu.addItem(.separator())
         let actions = NSMenu()
         for name in stateOrder {
             let action = item(manifest.clips[name]!.label, #selector(playAction(_:))); action.representedObject = name
@@ -267,7 +294,7 @@ final class PetController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let sizeParent = NSMenuItem(title: "人物大小", action: nil, keyEquivalent: ""); sizeParent.submenu = sizes; menu.addItem(sizeParent)
         menu.addItem(item("移回主屏幕", #selector(resetPosition)))
         menu.addItem(.separator())
-        let help = NSMenuItem(title: "单击挥手 · 双击跳跃 · 拖动移动", action: nil, keyEquivalent: ""); help.isEnabled = false; menu.addItem(help)
+        let help = NSMenuItem(title: "单击聊天 · 双击设置 · 拖动移动", action: nil, keyEquivalent: ""); help.isEnabled = false; menu.addItem(help)
         menu.addItem(item("退出", #selector(quitApp), key: "q"))
         return menu
     }
@@ -294,6 +321,24 @@ final class PetController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             refreshMenu()
         }
     }
+    func setupVoice(startWorker: Bool = true) {
+        guard let url = Bundle.main.url(forResource: "project-root", withExtension: "txt"),
+              let path = try? String(contentsOf: url, encoding: .utf8) else { return }
+        voice = VoiceController(root: URL(fileURLWithPath: path.trimmingCharacters(in: .whitespacesAndNewlines)), startWorker: startWorker)
+        voice?.anchorProvider = { [weak self] in
+            guard let self = self, let panel = self.panel, let screen = panel.screen else { return nil }
+            // Frames include transparent margins; anchor against the visible character body.
+            let frame = panel.frame
+            let body = frame.insetBy(dx: frame.width * 0.21, dy: frame.height * 0.10)
+            return (body, screen.visibleFrame)
+        }
+        voice?.onMenuChange = { [weak self] in self?.refreshMenu() }
+    }
+    @objc func showChat() { voice?.show() }
+    @objc func showChatHistory() { voice?.showHistory() }
+    @objc func showVoiceSettings() { voice?.showSettings() }
+    @objc func stopVoice() { voice?.stopAll() }
+    @objc func toggleVoiceNotifications() { voice?.toggleNotifications() }
     @objc func togglePause() { paused.toggle(); refreshMenu() }
     @objc func toggleAutomatic() { automatic.toggle(); if !automatic && state.hasPrefix("look-") { select("idle") }; refreshMenu() }
     @objc func resizePet(_ sender: NSMenuItem) {
@@ -309,6 +354,7 @@ final class PetController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc func quitApp() { NSApp.terminate(nil) }
     func applicationWillTerminate(_ notification: Notification) {
+        voice?.shutdown()
         if let panel = panel { settings.set(NSStringFromPoint(panel.frame.origin), forKey: "position") }
     }
     func renderQA(directory: String) {

@@ -1,0 +1,57 @@
+[
+  {
+    "variant": "A-current",
+    "text": "你好，我是洛琪希。今天的任务已经完成了，我们先休息一下吧。",
+    "overrides": {},
+    "seed": 42,
+    "audio_seconds": 6.58,
+    "generation_seconds": 3.4,
+    "path": "generated/zh-accent/A-current.wav",
+    "sha256": "a2ef6480210880d065676acd5450559a429b10ca50a4661694b34af5afe41b69",
+    "accent_verdict": "needs listener comparison",
+    "asr_text": "你好,我是洛奇希,今天的任務已經完成了,我們先休息一下吧"
+  },
+  {
+    "variant": "B-no-japanese-prompt",
+    "text": "你好，我是洛琪希。今天的任务已经完成了，我们先休息一下吧。",
+    "overrides": {
+      "prompt_text": ""
+    },
+    "seed": 42,
+    "audio_seconds": 6.1,
+    "generation_seconds": 2.568,
+    "path": "generated/zh-accent/B-no-japanese-prompt.wav",
+    "sha256": "a9e289c40b171afd5aa10ebcee891c92f902facc60e60891c142d55ff5159fa9",
+    "accent_verdict": "User selected: B sounds more natural and voice identity is acceptable",
+    "asr_text": "你好,我是洛奇希今天的任務已經完成了我們先休息一下吧"
+  },
+  {
+    "variant": "C-low-temperature",
+    "text": "你好，我是洛琪希。今天的任务已经完成了，我们先休息一下吧。",
+    "overrides": {
+      "temperature": 0.6
+    },
+    "seed": 42,
+    "audio_seconds": 5.86,
+    "generation_seconds": 2.936,
+    "path": "generated/zh-accent/C-low-temperature.wav",
+    "sha256": "f878f2852ef3592740450d292d060877c09280d34a74ff621f62b0a062ca69d5",
+    "accent_verdict": "needs listener comparison",
+    "asr_text": "你好,我是洛奇希,今天的任務已經完成了,我們先休息一下吧。"
+  },
+  {
+    "variant": "D-short-reference",
+    "text": "你好，我是洛琪希。今天的任务已经完成了，我们先休息一下吧。",
+    "overrides": {
+      "ref_audio_path": "/Users/ren/Documents/GitHub/Roxy/generated/zh-accent/reference-crop.wav",
+      "prompt_text": "パウロさん達も私の姿を見て驚いてたでしょ"
+    },
+    "seed": 42,
+    "audio_seconds": 5.66,
+    "generation_seconds": 2.941,
+    "path": "generated/zh-accent/D-short-reference.wav",
+    "sha256": "474d64fc3e96e2af9ed8b7838ef7fe02ff242a3843eb4dc1d073c43b615e3426",
+    "accent_verdict": "needs listener comparison",
+    "asr_text": "你好,我是洛奇希,今天的任務已經完成了,我們先休息一下吧"
+  }
+]

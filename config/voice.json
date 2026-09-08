@@ -6,5 +6,6 @@
   "reference_audio": null,
   "reference_text": null,
   "reference_reviewed": false,
-  "status": "local v2ProPlus CPU synthesis verified; unreviewed draft preview generated; no fine-tuning or desktop voice integration"
+  "status": "v2ProPlus zero-shot: original Japanese voice; Chinese audio-only reference selected by user after A/B audition; no fine-tuning",
+  "chinese_reference_mode": "audio_only"
 }
