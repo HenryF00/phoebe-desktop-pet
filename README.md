@@ -8,7 +8,8 @@ macOS 高清动漫桌宠，以及正在准备的洛琪希本地日语 AI 语音�
 - 保留 1.1.2 光影修正：按材质校正明暗，眨眼仅改变眼部，不使用淡入淡出。
 - 已导入 `assets/voice/roxy_vad_8-10s/` 原始语音目录，包含 66 个 WAV 和原清单，约 10 分 7 秒。
 - 已准备音频体检、日文字幕核对表、参考音频配置工具和本地 GPT-SoVITS 合成探针。
-- **AI 语音尚未接通**：日文字幕未转写/核对，未选定参考音频，未下载模型或测量推理速度。当前 App 仍是无语音桌宠。
+- 已安装 MLX Whisper，下载识别模型并在本机完成全部 66 段日语自动转写；字幕仍需回听校对。
+- **AI 语音尚未接通**：未选定已核对的参考音频，GPT-SoVITS 合成环境与权重尚未安装，未微调或生成 AI 语音。当前 App 仍是无语音桌宠。
 
 这是在本机 `Documents/GitHub/Roxy` 创建的独立 Git 项目。
 
@@ -34,11 +35,20 @@ python3 scripts/build.py
 4. **必要时微调**：如果零样本音色不够接近，再用核对后的数据做角色微调。66 个切片不等于 66 句完整训练样本，不应直接整包送进训练。
 5. **接实时播放**：完成 Mac 兼容性与性能实测后，再将日语回复按句送入本地服务，逐块播放，并加入取消、音量、静音和口型。对话模型可以继续在线，声音在本地合成。
 
-详细边界和实现设计见 [语音适配说明](docs/voice-adaptation.md)。
+实际操作顺序见 [训练与合成操作说明](docs/training-walkthrough.md)，实现边界见 [语音适配说明](docs/voice-adaptation.md)。
 
 ## 已提供的工具
 
 ```sh
+# 本地自动转写；已有相同音频与模型的结果会跳过
+.venv/bin/python scripts/transcribe_voice.py
+
+# 只填充空白且未校对的字幕行，保留 reviewed=false
+python3 scripts/import_asr_drafts.py
+
+# 校对后导出 GPT-SoVITS 训练清单
+python3 scripts/export_training.py
+
 # 重新检查全部素材；不会覆盖已填写的字幕表
 python3 scripts/audit_voice.py
 
@@ -72,4 +82,3 @@ generated/                         合成音频及测量结果（不提交）
 ```
 
 Codex 状态桥接脚本在 `scripts/codex_bridge.py`。本机已有的 Hooks 安装位置仍为 `~/Library/Application Support/RoxyHD/bridge.py`；本次整理没有修改其信任状态或重新安装 Hooks。
-

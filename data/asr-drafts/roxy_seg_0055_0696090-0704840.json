@@ -1,0 +1,68 @@
+{
+  "file": "roxy_seg_0055_0696090-0704840.wav",
+  "source_sha256": "ad42b858b23e69fbd35f2292f1ac13dd382bee1be133fdc39e60bff08b9d92c6",
+  "model": "mlx-community/whisper-large-v3-turbo",
+  "text": "に互いに声が芽生えて 明星を脱出したところでん そんなことより",
+  "language": "ja",
+  "reviewed": false,
+  "elapsed_seconds": 0.644,
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 6.0,
+      "text": "に互いに声が芽生えて 明星を脱出したところで",
+      "tokens": [
+        50365,
+        4108,
+        1369,
+        240,
+        1764,
+        4108,
+        32045,
+        5142,
+        13778,
+        121,
+        8244,
+        31045,
+        220,
+        11100,
+        20682,
+        5998,
+        27067,
+        109,
+        7781,
+        8533,
+        46001,
+        2474,
+        50665
+      ],
+      "temperature": 0,
+      "avg_logprob": -0.5822944045066833,
+      "compression_ratio": 0.9888888888888889,
+      "no_speech_prob": 1.119034753749304e-09
+    },
+    {
+      "id": 1,
+      "seek": 0,
+      "start": 6.0,
+      "end": 8.74,
+      "text": "ん そんなことより",
+      "tokens": [
+        50665,
+        3225,
+        18421,
+        16548,
+        13235,
+        5591,
+        5095,
+        50802
+      ],
+      "temperature": 0,
+      "avg_logprob": -0.5822944045066833,
+      "compression_ratio": 0.9888888888888889,
+      "no_speech_prob": 1.119034753749304e-09
+    }
+  ]
+}

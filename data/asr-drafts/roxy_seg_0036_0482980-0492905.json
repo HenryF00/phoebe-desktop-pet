@@ -1,0 +1,66 @@
+{
+  "file": "roxy_seg_0036_0482980-0492905.wav",
+  "source_sha256": "5f22fa7bda41d94fc25ed009b1319352706cbe06c0a95014241501839004699d",
+  "model": "mlx-community/whisper-large-v3-turbo",
+  "text": "ていっ 死亡者リストはまさかはいルディもパウロさん達も",
+  "language": "ja",
+  "reviewed": false,
+  "elapsed_seconds": 0.643,
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 5.94,
+      "text": "ていっ 死亡者リストはまさか",
+      "tokens": [
+        50365,
+        2996,
+        1764,
+        2970,
+        220,
+        16989,
+        1369,
+        94,
+        12444,
+        12376,
+        40498,
+        3065,
+        2889,
+        6722,
+        3703,
+        50662
+      ],
+      "temperature": 0,
+      "avg_logprob": -0.7508468627929688,
+      "compression_ratio": 0.9875,
+      "no_speech_prob": 1.4619408461591377e-10
+    },
+    {
+      "id": 1,
+      "seek": 0,
+      "start": 5.94,
+      "end": 9.88,
+      "text": "はいルディもパウロさん達も",
+      "tokens": [
+        50662,
+        11050,
+        9405,
+        31327,
+        26760,
+        4801,
+        23268,
+        20745,
+        17164,
+        15567,
+        33086,
+        4801,
+        50859
+      ],
+      "temperature": 0,
+      "avg_logprob": -0.7508468627929688,
+      "compression_ratio": 0.9875,
+      "no_speech_prob": 1.4619408461591377e-10
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "asr_completed_clips": 66,
+  "human_reviewed_clips": 0,
+  "all_draft_audio_hashes_match": true,
+  "asr_model": "mlx-community/whisper-large-v3-turbo",
+  "model_revision": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
+  "model_weights_sha256": "951ed3fc1203e6a62467abb2144a96ce7eafca8fa77e3704fdb8635ff3e7f8a6",
+  "model_weight_hash_matches_hub_etag": true,
+  "mlx_metal_available": true,
+  "median_transcribe_call_seconds_excluding_first_download": 0.68,
+  "timing_note": "ASR transcription only, not TTS generation or realtime voice latency; first clip included model download",
+  "priority_review": [
+    "roxy_seg_0049_0635507-0644394.wav",
+    "roxy_seg_0061_0754428-0763980.wav"
+  ],
+  "tts_environment": "not installed; stalled GitHub direct clone cancelled, system HTTP proxy TLS failed, official codeload download timed out after 90s; removed incomplete archive",
+  "tts_synthesis": "not run",
+  "training": "not started",
+  "remote_repository": "not created",
+  "checks": [
+    "Python syntax",
+    "draft import preserves reviewed/manual text",
+    "unreviewed training export refused",
+    "reviewed fixture exports upstream list format"
+  ]
+}

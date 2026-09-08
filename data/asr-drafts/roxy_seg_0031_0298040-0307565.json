@@ -1,0 +1,78 @@
+{
+  "file": "roxy_seg_0031_0298040-0307565.wav",
+  "source_sha256": "a88210f3523df4a8dbbc8a6c0943282deece416db1478a914270086fde295def",
+  "model": "mlx-community/whisper-large-v3-turbo",
+  "text": "しかしこれで私があげられるものも本当にごくわずかになりましたはっ",
+  "language": "ja",
+  "reviewed": false,
+  "elapsed_seconds": 0.644,
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 3.4,
+      "text": "しかしこれで私があげられるものも",
+      "tokens": [
+        50365,
+        32156,
+        2849,
+        49477,
+        20083,
+        5142,
+        3590,
+        26012,
+        5154,
+        35367,
+        44726,
+        4801,
+        50535
+      ],
+      "temperature": 0,
+      "avg_logprob": -0.32482775326432856,
+      "compression_ratio": 1.1566265060240963,
+      "no_speech_prob": 1.5158471700082998e-10
+    },
+    {
+      "id": 1,
+      "seek": 0,
+      "start": 3.4,
+      "end": 5.34,
+      "text": "本当にごくわずかになりました",
+      "tokens": [
+        50535,
+        37505,
+        4108,
+        9991,
+        6134,
+        9206,
+        18216,
+        3703,
+        22615,
+        36941,
+        50632
+      ],
+      "temperature": 0,
+      "avg_logprob": -0.32482775326432856,
+      "compression_ratio": 1.1566265060240963,
+      "no_speech_prob": 1.5158471700082998e-10
+    },
+    {
+      "id": 2,
+      "seek": 0,
+      "start": 5.34,
+      "end": 7.46,
+      "text": "はっ",
+      "tokens": [
+        50632,
+        3065,
+        2970,
+        50738
+      ],
+      "temperature": 0,
+      "avg_logprob": -0.32482775326432856,
+      "compression_ratio": 1.1566265060240963,
+      "no_speech_prob": 1.5158471700082998e-10
+    }
+  ]
+}

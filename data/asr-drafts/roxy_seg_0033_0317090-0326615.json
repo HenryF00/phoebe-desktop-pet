@@ -1,0 +1,56 @@
+{
+  "file": "roxy_seg_0033_0317090-0326615.wav",
+  "source_sha256": "577a2efd6d1216f96435e773e32957ab722c4435de7046f2fdb68596e5256930",
+  "model": "mlx-community/whisper-large-v3-turbo",
+  "text": "さては怖いんですね意外に年相応な",
+  "language": "ja",
+  "reviewed": false,
+  "elapsed_seconds": 0.617,
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 6.0,
+      "text": "さては怖いんですね",
+      "tokens": [
+        50365,
+        6722,
+        2996,
+        3065,
+        39647,
+        1764,
+        3225,
+        14277,
+        50665
+      ],
+      "temperature": 0,
+      "avg_logprob": -0.4017177104949951,
+      "compression_ratio": 0.8135593220338984,
+      "no_speech_prob": 6.111190997692972e-10
+    },
+    {
+      "id": 1,
+      "seek": 0,
+      "start": 6.0,
+      "end": 9.46,
+      "text": "意外に年相応な",
+      "tokens": [
+        50665,
+        9042,
+        12022,
+        4108,
+        5157,
+        15106,
+        4263,
+        250,
+        3203,
+        50838
+      ],
+      "temperature": 0,
+      "avg_logprob": -0.4017177104949951,
+      "compression_ratio": 0.8135593220338984,
+      "no_speech_prob": 6.111190997692972e-10
+    }
+  ]
+}

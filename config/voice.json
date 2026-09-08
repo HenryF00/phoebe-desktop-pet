@@ -6,5 +6,5 @@
   "reference_audio": null,
   "reference_text": null,
   "reference_reviewed": false,
-  "status": "dataset_imported; model and reference transcription not configured"
+  "status": "66 local Japanese ASR drafts prepared; review, TTS environment and weights pending; no fine-tuning or synthesis yet"
 }

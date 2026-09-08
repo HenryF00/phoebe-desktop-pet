@@ -1,0 +1,48 @@
+{
+  "file": "roxy_seg_0049_0635507-0644394.wav",
+  "source_sha256": "6ae92cf39b131c69a6dac7b67c5342383ecf5d6bc4edfe50e83b11e8f19f276c",
+  "model": "mlx-community/whisper-large-v3-turbo",
+  "text": "meていません 強い",
+  "language": "ja",
+  "reviewed": false,
+  "elapsed_seconds": 0.589,
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 3.0,
+      "text": "me",
+      "tokens": [
+        50365,
+        1398,
+        50515
+      ],
+      "temperature": 0,
+      "avg_logprob": -1.4224859873453777,
+      "compression_ratio": 0.75,
+      "no_speech_prob": 2.9078867092025007e-10
+    },
+    {
+      "id": 1,
+      "seek": 0,
+      "start": 3.0,
+      "end": 8.88,
+      "text": "ていません 強い",
+      "tokens": [
+        50515,
+        2996,
+        1764,
+        30250,
+        220,
+        22752,
+        1764,
+        50809
+      ],
+      "temperature": 0,
+      "avg_logprob": -1.4224859873453777,
+      "compression_ratio": 0.75,
+      "no_speech_prob": 2.9078867092025007e-10
+    }
+  ]
+}

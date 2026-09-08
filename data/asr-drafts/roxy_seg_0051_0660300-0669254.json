@@ -1,0 +1,63 @@
+{
+  "file": "roxy_seg_0051_0660300-0669254.wav",
+  "source_sha256": "04e5df0319965ffb1d80b2a08e58019b6fe64d32018cae2ef6539cdef8d8302d",
+  "model": "mlx-community/whisper-large-v3-turbo",
+  "text": "まさか見ていただけで襲ってくるとかないですよね宿の修理",
+  "language": "ja",
+  "reviewed": false,
+  "elapsed_seconds": 0.632,
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0.0,
+      "end": 3.52,
+      "text": "まさか見ていただけで襲ってくるとかないですよね",
+      "tokens": [
+        50365,
+        2889,
+        6722,
+        3703,
+        33363,
+        32418,
+        7625,
+        2474,
+        15663,
+        110,
+        6102,
+        6134,
+        4895,
+        30607,
+        9311,
+        4767,
+        30346,
+        50541
+      ],
+      "temperature": 0,
+      "avg_logprob": -0.1504608436867043,
+      "compression_ratio": 1.0384615384615385,
+      "no_speech_prob": 6.773603900001035e-11
+    },
+    {
+      "id": 1,
+      "seek": 0,
+      "start": 3.52,
+      "end": 8.92,
+      "text": "宿の修理",
+      "tokens": [
+        50541,
+        2415,
+        123,
+        2972,
+        7792,
+        106,
+        13876,
+        50811
+      ],
+      "temperature": 0,
+      "avg_logprob": -0.1504608436867043,
+      "compression_ratio": 1.0384615384615385,
+      "no_speech_prob": 6.773603900001035e-11
+    }
+  ]
+}
