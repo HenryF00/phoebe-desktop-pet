@@ -1,0 +1,33 @@
+{
+  "elapsed_seconds": 1.28,
+  "event_types": [
+    "user",
+    "phase",
+    "delta",
+    "delta",
+    "audio_start",
+    "audio_chunk",
+    "audio_chunk",
+    "audio_end",
+    "done"
+  ],
+  "audio_start": [
+    {
+      "id": "qa-expression",
+      "type": "audio_start",
+      "stream": "9122843b-5219-4606-a22f-a9f076b91651",
+      "subtitle": "谢谢你，小任。",
+      "sample_rate": 32000,
+      "expression": "shy"
+    }
+  ],
+  "audio_chunks": 2,
+  "done": [
+    {
+      "id": "qa-expression",
+      "type": "done",
+      "text": "谢谢你，小任。",
+      "warning": ""
+    }
+  ]
+}

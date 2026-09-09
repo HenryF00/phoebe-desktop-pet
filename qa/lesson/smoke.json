@@ -1,0 +1,34 @@
+{
+  "route": "lesson",
+  "delegated": false,
+  "fallback": false,
+  "segments": [
+    {
+      "index": 0,
+      "caption": "我们用虚构条件演示：1000元、固定年利率10%、三年，不追加、不取出，不计费用和税，复利每年计息一次。这不是投资建议。",
+      "focus": "point-0",
+      "gesture": "explain",
+      "duration": 16.88
+    },
+    {
+      "index": 1,
+      "caption": "关键看第二年：单利仍按1000元计息，复利则按1100元计息。利率没变，是上一年的利息也开始生息。",
+      "focus": "point-1",
+      "gesture": "explain",
+      "duration": 13.94
+    },
+    {
+      "index": 2,
+      "caption": "第三年末，复利多出31元，来自利息继续计息。但这依赖演示假设，不是收益保证；换成月计息时，也要对应使用月利率和月数。",
+      "focus": "point-2",
+      "gesture": "emphasize",
+      "duration": 16.28
+    }
+  ],
+  "audio_arrival_seconds": [
+    7.2,
+    12.93,
+    19.28
+  ],
+  "total_seconds": 59.68
+}

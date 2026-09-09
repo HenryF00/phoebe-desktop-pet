@@ -3,6 +3,10 @@ import Cocoa
 final class CompanionPanel: NSPanel {
     var acceptsKeyboard = true
     override var canBecomeKey: Bool { acceptsKeyboard }
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if let editor=firstResponder as? ComposerEditor, event.modifierFlags.contains(.command), editor.performKeyEquivalent(with:event) { return true }
+        return super.performKeyEquivalent(with:event)
+    }
     override var canBecomeMain: Bool { false }
 }
 

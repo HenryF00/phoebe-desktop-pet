@@ -2,10 +2,13 @@
 import json
 import re
 
+EXPRESSIONS = ('calm', 'shy', 'nod', 'sad', 'thoughtful')
+
 REPLY_SCHEMA = {'type':'object', 'additionalProperties':False,
     'properties':{'segments':{'type':'array', 'minItems':1, 'maxItems':3, 'items':{
         'type':'object', 'additionalProperties':False, 'properties':{
-            'caption':{'type':'string'}, 'speech':{'type':'string'}}, 'required':['caption','speech']}}},
+            'caption':{'type':'string'}, 'speech':{'type':'string'},
+            'expression':{'type':'string', 'enum':list(EXPRESSIONS)}}, 'required':['caption','speech','expression']}}},
     'required':['segments']}
 
 class BilingualReply:
@@ -22,8 +25,10 @@ class BilingualReply:
                 if self.cursor == len(self.raw) or self.raw[self.cursor] == ']': break
                 try: item, end = json.JSONDecoder().raw_decode(self.raw, self.cursor)
                 except json.JSONDecodeError: break
-                if not isinstance(item, dict) or set(item) != {'caption','speech'} or any(
-                        not isinstance(item[k], str) or not item[k].strip() for k in ('caption','speech')):
+                if (not isinstance(item, dict) or not {'caption','speech'} <= set(item)
+                        or set(item) - {'caption','speech','expression'} or any(
+                        not isinstance(item[k], str) or not item[k].strip() for k in ('caption','speech'))
+                        or item.get('expression', 'calm') not in EXPRESSIONS):
                     raise ValueError('字幕生成格式不完整，请重试。')
                 self.cursor = end; self.items.append(item); result.append(item)
         if final:

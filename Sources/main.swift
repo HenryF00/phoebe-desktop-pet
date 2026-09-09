@@ -11,7 +11,8 @@ struct AnimationManifest: Decodable {
     let bodyHeight: Double
     let clips: [String: Clip]
 }
-final class PetPanel: NSPanel { override var canBecomeKey: Bool { true } }
+// The character is a pointer surface, never a keyboard editor. Keep focus in the composer.
+final class PetPanel: NSPanel { override var canBecomeKey: Bool { false } }
 
 // Keep the entire transparent pet canvas within the nearest usable display.
 func visiblePetFrame(_ proposed: NSRect, pointer: NSPoint? = nil) -> NSRect {
@@ -30,6 +31,29 @@ func visiblePetFrame(_ proposed: NSRect, pointer: NSPoint? = nil) -> NSRect {
 
 final class PetView: NSView {
     var image: NSImage?
+    var taskBadge = "none"
+    var taskUnread = false
+    var taskAction: (() -> Void)?
+    var badgePressed = false
+    var badgeRect: NSRect { NSRect(x:bounds.width*0.77-22,y:bounds.height*0.88-22,width:44,height:44) }
+    func drawBadge() {
+        guard taskBadge != "none" else { return }
+        let center=NSPoint(x:badgeRect.midX,y:badgeRect.midY)
+        let circle=NSRect(x:center.x-15,y:center.y-15,width:30,height:30)
+        NSColor(calibratedWhite:0.09,alpha:0.92).setFill();NSBezierPath(ovalIn:circle).fill()
+        NSColor.systemBlue.setStroke();NSColor.systemBlue.setFill()
+        if taskBadge == "running" {
+            let angle=NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : ProcessInfo.processInfo.systemUptime*230
+            let arc=NSBezierPath();arc.appendArc(withCenter:center,radius:10,startAngle:CGFloat(angle),endAngle:CGFloat(angle+265))
+            arc.lineWidth=3;arc.lineCapStyle = .round;arc.stroke()
+        } else if taskBadge == "waiting" {
+            NSBezierPath(roundedRect:NSRect(x:center.x-5,y:center.y-6,width:3,height:12),xRadius:1,yRadius:1).fill()
+            NSBezierPath(roundedRect:NSRect(x:center.x+2,y:center.y-6,width:3,height:12),xRadius:1,yRadius:1).fill()
+        } else { NSBezierPath(ovalIn:NSRect(x:center.x-5,y:center.y-5,width:10,height:10)).fill() }
+        if taskUnread && taskBadge != "unread" {
+            NSBezierPath(ovalIn:NSRect(x:circle.maxX-5,y:circle.maxY-5,width:8,height:8)).fill()
+        }
+    }
     var menuProvider: (() -> NSMenu)?
     var action: ((String) -> Void)?
     var chatAction: (() -> Void)?
@@ -38,6 +62,7 @@ final class PetView: NSView {
     var dragStart: NSPoint?
     var windowStart: NSPoint?
     var dragged = false
+    var allowsDragging = true
     var jumpOffset: CGFloat = 0
     override var mouseDownCanMoveWindow: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -47,8 +72,10 @@ final class PetView: NSView {
         let rect = bounds.offsetBy(dx: 0, dy: jumpOffset)
         image?.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1,
                     respectFlipped: false, hints: [.interpolation: NSImageInterpolation.high])
+        drawBadge()
     }
     func isOpaqueAt(_ point: NSPoint) -> Bool {
+        if taskBadge != "none" && badgeRect.contains(point) { return true }
         guard bounds.contains(point), let bitmap = image?.representations.compactMap({ $0 as? NSBitmapImageRep }).first else { return false }
         let x = min(bitmap.pixelsWide - 1, max(0, Int(point.x / bounds.width * CGFloat(bitmap.pixelsWide))))
         let y = min(bitmap.pixelsHigh - 1, max(0, Int((1 - (point.y - jumpOffset) / bounds.height) * CGFloat(bitmap.pixelsHigh))))
@@ -56,11 +83,13 @@ final class PetView: NSView {
     }
     override func mouseDown(with event: NSEvent) {
         if event.modifierFlags.contains(.control) { rightMouseDown(with: event); return }
+        badgePressed = taskBadge != "none" && badgeRect.contains(convert(event.locationInWindow,from:nil))
+        if badgePressed { clickTimer?.invalidate();return }
         dragStart = NSEvent.mouseLocation; windowStart = window?.frame.origin; dragged = false
         if event.clickCount == 2 { clickTimer?.invalidate(); clickTimer = nil }
     }
     override func mouseDragged(with event: NSEvent) {
-        guard let start = dragStart, let origin = windowStart else { return }
+        guard allowsDragging, let start = dragStart, let origin = windowStart else { return }
         let point = NSEvent.mouseLocation
         if abs(point.x - start.x) + abs(point.y - start.y) > 4 {
             clickTimer?.invalidate(); clickTimer = nil
@@ -73,6 +102,7 @@ final class PetView: NSView {
         }
     }
     override func mouseUp(with event: NSEvent) {
+        if badgePressed { badgePressed=false;taskAction?();return }
         if dragged { clickTimer?.invalidate(); action?("idle") }
         else if event.clickCount == 2 { clickTimer?.invalidate(); settingsAction?() }
         else if event.clickCount == 1 {
@@ -84,6 +114,7 @@ final class PetView: NSView {
         dragStart = nil; windowStart = nil
     }
     override func rightMouseDown(with event: NSEvent) {
+        clickTimer?.invalidate();clickTimer=nil
         if let menu = menuProvider?() { NSMenu.popUpContextMenu(menu, with: event, for: self) }
     }
 }
@@ -113,11 +144,16 @@ final class PetController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var lastStateChange = 0.0
     var voice: VoiceController?
     var followCodex = true
+    var chatPreviouslyOwned = false
+    var lastTeachingSegment = ""
     var codexState: String?
     var codexLabel = "尚未收到 Codex 事件"
     var lastCodexPoll = 0.0
     var manualUntil = 0.0
-    let stateOrder = ["idle", "waving", "jumping", "running-right", "running-left", "running", "waiting", "review", "failed"]
+    weak var lectureBoard: NSWindow?
+    var desktopFrameBeforeLecture: NSRect?
+    var isLectureDocked: Bool { desktopFrameBeforeLecture != nil }
+    let stateOrder = ["idle", "waving", "jumping", "running-right", "running-left", "running", "waiting", "review", "failed", "chat-thinking", "chat-listening", "chat-speaking", "chat-nod", "chat-shy", "teaching-present", "teaching-explain", "teaching-point", "teaching-point-right", "teaching-emphasize"]
     let settings = UserDefaults.standard
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -152,11 +188,15 @@ final class PetController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let saved = settings.double(forKey: "displayHeight")
         if (300...560).contains(saved) { height = saved }
+        automatic=settings.object(forKey:"automaticInteraction") as? Bool ?? true
+        followCodex=settings.object(forKey:"followCodex") as? Bool ?? true
+        paused=settings.bool(forKey:"animationPaused")
         pet = PetView(frame: .zero)
         pet.setAccessibilityElement(true)
         pet.setAccessibilityRole(.image)
         pet.menuProvider = { [weak self] in self?.makeMenu() ?? NSMenu() }
         pet.settingsAction = { [weak self] in self?.voice?.showSettings() }
+        pet.taskAction = { [weak self] in self?.voice?.showTaskIndicator() }
         pet.chatAction = { [weak self] in self?.voice?.toggleChat() }
         pet.action = { [weak self] state in
             self?.manualUntil = ProcessInfo.processInfo.systemUptime + 4
@@ -201,7 +241,12 @@ final class PetController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
     func tick() {
-        voice?.updateAnchor()
+        voice?.updateAnchor();voice?.presentationTick()
+        let badge=voice?.taskBadgeState ?? "none", unread=voice?.unreadTasks.isEmpty == false
+        if pet.taskBadge != badge || pet.taskUnread != unread || badge == "running" {
+            pet.taskBadge=badge;pet.taskUnread=unread;pet.needsDisplay=true
+            pet.toolTip = badge == "running" ? "委托正在进行，点击查看任务" : badge == "waiting" ? "任务需要你处理" : badge == "unread" ? "有未读结果，点击打开小黑板" : nil
+        }
         let now = ProcessInfo.processInfo.systemUptime
         let delta = min(now - previousTime, 0.12); previousTime = now
         if now - lastCodexPoll > 1 { lastCodexPoll = now; pollCodex() }
@@ -211,20 +256,32 @@ final class PetController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             panel.ignoresMouseEvents = !pet.isOpaqueAt(local)
         }
         guard !paused && !menuOpen else { return }
-        let taskOwnsPose = followCodex && codexState != nil && now > manualUntil && pet.dragStart == nil
+        let chatTarget = pet.dragStart == nil ? voice?.petPose : nil
+        let chatOwnsPose = chatTarget != nil
+        let releasedChat = chatPreviouslyOwned && !chatOwnsPose
+        chatPreviouslyOwned = chatOwnsPose
+        if let target = chatTarget {
+            let segment="\(voice?.boardSpeechRequest ?? ""):\(voice?.currentLessonAudio?.index ?? -1)"
+            if voice?.activeBoardSpeech == true && segment != lastTeachingSegment {
+                lastTeachingSegment=segment;frameIndex=0;frameElapsed=0;lastDraw=""
+            }
+            select(target)
+        }
+        let taskOwnsPose = !isLectureDocked && !chatOwnsPose && followCodex && codexState != nil && now > manualUntil && pet.dragStart == nil
         if taskOwnsPose, let target = codexState, target != state { select(target) }
+        if releasedChat && !taskOwnsPose && pet.dragStart == nil { select("idle") }
         actionElapsed += delta
         frameElapsed += delta
         if let clip = manifest.clips[state] {
             while frameElapsed >= clip.durations[frameIndex] {
                 frameElapsed -= clip.durations[frameIndex]
-                frameIndex = (frameIndex + 1) % clip.frames.count
+                frameIndex = ["chat-nod","teaching-emphasize"].contains(state) ? min(frameIndex + 1, clip.frames.count - 1) : (frameIndex + 1) % clip.frames.count
             }
         }
-        if !taskOwnsPose && state != "idle" && !state.hasPrefix("look-") && pet.dragStart == nil && actionElapsed > (state == "jumping" ? 0.85 : state == "waving" ? 2.0 : 3.8) {
+        if !chatOwnsPose && !taskOwnsPose && state != "idle" && !state.hasPrefix("look-") && pet.dragStart == nil && actionElapsed > (state == "jumping" ? 0.85 : state == "waving" ? 2.0 : 3.8) {
             select("idle")
         }
-        if automatic && !taskOwnsPose && pet.dragStart == nil {
+        if automatic && !isLectureDocked && !chatOwnsPose && !taskOwnsPose && pet.dragStart == nil {
             let mouse = NSEvent.mouseLocation
             let dx = mouse.x - panel.frame.midX, dy = mouse.y - panel.frame.midY
             let moved = hypot(mouse.x - lastMouse.x, mouse.y - lastMouse.y) > 3
@@ -270,12 +327,17 @@ final class PetController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu(); menu.delegate = self
         let label = NSMenuItem(title: "洛琪希 · 高清动画桌宠", action: nil, keyEquivalent: ""); label.isEnabled = false; menu.addItem(label)
         let pause = item(paused ? "继续动画" : "暂停动画", #selector(togglePause)); menu.addItem(pause)
+        if let voice=voice {
+            let projects=NSMenuItem(title:"选择 Codex 项目",action:nil,keyEquivalent:"")
+            projects.submenu=voice.projectMenu();menu.addItem(projects)
+        }
         let auto = item("自动互动与视线跟随", #selector(toggleAutomatic)); auto.state = automatic ? .on : .off; menu.addItem(auto)
         let follow = item("跟随 Codex 任务", #selector(toggleCodex)); follow.state = followCodex ? .on : .off; menu.addItem(follow)
         let connection = NSMenuItem(title: codexLabel, action: nil, keyEquivalent: ""); connection.isEnabled = false; menu.addItem(connection)
         menu.addItem(.separator())
         menu.addItem(item("与洛琪希聊天…", #selector(showChat)))
-        menu.addItem(item("聊天与声音设置…", #selector(showVoiceSettings)))
+        menu.addItem(item("全部设置…", #selector(showVoiceSettings)))
+        menu.addItem(item("把当前回复放到小黑板…", #selector(explainReply)))
         menu.addItem(item("查看聊天记录…", #selector(showChatHistory)))
         let speech = item("任务语音播报", #selector(toggleVoiceNotifications))
         speech.state = voice?.notificationEnabled == true ? .on : .off; menu.addItem(speech)
@@ -302,7 +364,7 @@ final class PetController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuDidClose(_ menu: NSMenu) { menuOpen = false }
     func refreshMenu() { statusItem?.menu = makeMenu() }
     @objc func playAction(_ sender: NSMenuItem) { paused = false; manualUntil = ProcessInfo.processInfo.systemUptime + 6; select(sender.representedObject as! String) }
-    @objc func toggleCodex() { followCodex.toggle(); if !followCodex { select("idle") }; refreshMenu() }
+    @objc func toggleCodex() { followCodex.toggle(); settings.set(followCodex,forKey:"followCodex"); if !followCodex { select("idle") }; refreshMenu() }
     func pollCodex() {
         let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/RoxyHD/codex-status")
         let now = Date().timeIntervalSince1970
@@ -317,7 +379,7 @@ final class PetController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let label = next == "running" ? "Codex：正在处理任务" : next == "waiting" ? "Codex：等待你的操作" : next == "review" ? "Codex：本轮已结束" : records.isEmpty ? "尚未收到 Codex 事件（或连接过期）" : "Codex：空闲"
         if codexState != next || codexLabel != label {
             let old = codexState; codexState = next; codexLabel = label
-            if old != nil && next == nil && followCodex && ProcessInfo.processInfo.systemUptime > manualUntil { select("idle") }
+            if old != nil && next == nil && followCodex && voice?.petPose == nil && ProcessInfo.processInfo.systemUptime > manualUntil { select("idle") }
             refreshMenu()
         }
     }
@@ -332,30 +394,83 @@ final class PetController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let body = frame.insetBy(dx: frame.width * 0.21, dy: frame.height * 0.10)
             return (body, screen.visibleFrame)
         }
+        voice?.petSettingsRead = { [weak self] in
+            guard let self=self else { return (560,true,true,false) }
+            return (Double(self.height),self.automatic,self.followCodex,self.paused)
+        }
+        voice?.petSettingsApply = { [weak self] height,automatic,follow,paused in
+            guard let self=self else { return }
+            self.automatic=automatic;self.followCodex=follow;self.paused=paused
+            self.settings.set(automatic,forKey:"automaticInteraction");self.settings.set(follow,forKey:"followCodex");self.settings.set(paused,forKey:"animationPaused")
+            let item=NSMenuItem();item.tag=Int(height);self.resizePet(item)
+        }
+        voice?.lecturePlacement = { [weak self] board in self?.placeForLecture(board) }
+        voice?.petResetPosition = { [weak self] in self?.resetPosition() }
+        voice?.onProjectMenuChange = { [weak self] in self?.refreshMenu() }
         voice?.onMenuChange = { [weak self] in self?.refreshMenu() }
     }
+    @objc func explainReply() { voice?.explainCurrentReply() }
     @objc func showChat() { voice?.show() }
     @objc func showChatHistory() { voice?.showHistory() }
     @objc func showVoiceSettings() { voice?.showSettings() }
     @objc func stopVoice() { voice?.stopAll() }
     @objc func toggleVoiceNotifications() { voice?.toggleNotifications() }
-    @objc func togglePause() { paused.toggle(); refreshMenu() }
-    @objc func toggleAutomatic() { automatic.toggle(); if !automatic && state.hasPrefix("look-") { select("idle") }; refreshMenu() }
+    @objc func togglePause() { paused.toggle(); settings.set(paused,forKey:"animationPaused"); refreshMenu() }
+    @objc func toggleAutomatic() { automatic.toggle(); settings.set(automatic,forKey:"automaticInteraction"); if !automatic && state.hasPrefix("look-") { select("idle") }; refreshMenu() }
     @objc func resizePet(_ sender: NSMenuItem) {
         height = CGFloat(sender.tag)
-        var frame = panel.frame; frame.size = windowSize(); panel.setFrame(visiblePetFrame(frame), display: true)
+        if var desktop = desktopFrameBeforeLecture {
+            desktop.size = windowSize(); desktopFrameBeforeLecture = visiblePetFrame(desktop)
+            if let board = lectureBoard { placeForLecture(board) }
+        } else {
+            var frame = panel.frame; frame.size = windowSize(); panel.setFrame(visiblePetFrame(frame), display: true)
+        }
         pet.needsDisplay = true
         settings.set(Double(height), forKey: "displayHeight"); refreshMenu()
     }
     @objc func resetPosition() {
         guard let area = NSScreen.screens.first?.visibleFrame else { return }
+        if var desktop = desktopFrameBeforeLecture {
+            desktop.origin = NSPoint(x: area.maxX - desktop.width - 24, y: area.minY + 16)
+            desktopFrameBeforeLecture = visiblePetFrame(desktop)
+            return
+        }
         panel.setFrameOrigin(NSPoint(x: area.maxX - panel.frame.width - 24, y: area.minY + 16))
         panel.orderFrontRegardless()
+    }
+    func placeForLecture(_ board: NSWindow?) {
+        guard let panel = panel, let pet = pet, let manifest = manifest else { return }
+        guard let board = board else {
+            lectureBoard?.removeChildWindow(panel); lectureBoard = nil
+            guard let desktop = desktopFrameBeforeLecture else { return }
+            desktopFrameBeforeLecture = nil; pet.allowsDragging = true
+            panel.setFrame(visiblePetFrame(desktop), display: true)
+            panel.orderFrontRegardless(); pet.needsDisplay = true
+            return
+        }
+        if desktopFrameBeforeLecture == nil {
+            desktopFrameBeforeLecture = panel.frame
+            pet.clickTimer?.invalidate(); pet.clickTimer = nil
+            pet.dragStart = nil; pet.windowStart = nil; pet.dragged = false
+            pet.allowsDragging = false
+            gazeCandidate = ""; gazeUntil = 0
+            select("idle")
+        }
+        if lectureBoard !== board {
+            lectureBoard?.removeChildWindow(panel)
+            lectureBoard = board; board.addChildWindow(panel, ordered: .above)
+        }
+        let screen = board.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? board.frame
+        let frame = lecturePetFrame(board: board.frame, screen: screen,
+                                    canvas: NSSize(width: manifest.width, height: manifest.height),
+                                    bodyHeight: manifest.bodyHeight, preferredHeight: height)
+        if panel.frame != frame { panel.setFrame(frame, display: true) }
+        pet.needsDisplay = true
     }
     @objc func quitApp() { NSApp.terminate(nil) }
     func applicationWillTerminate(_ notification: Notification) {
         voice?.shutdown()
-        if let panel = panel { settings.set(NSStringFromPoint(panel.frame.origin), forKey: "position") }
+        if let frame = desktopFrameBeforeLecture ?? panel?.frame { settings.set(NSStringFromPoint(frame.origin), forKey: "position") }
     }
     func renderQA(directory: String) {
         try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)

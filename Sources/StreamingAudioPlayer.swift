@@ -7,6 +7,7 @@ final class StreamingAudioPlayer {
     final class Segment {
         let id: String
         let subtitle: String
+        var expression = "calm"
         var buffers: [AVAudioPCMBuffer] = []
         var ended = false
         var pending = 0
@@ -20,6 +21,7 @@ final class StreamingAudioPlayer {
     var generation = 0
     var suspended = false { didSet { if !suspended { pump() } } }
     var onBegan: ((String) -> Void)?
+    var onSegmentBegan: ((String) -> Void)?
     var onIdle: (() -> Void)?
     var onError: (() -> Void)?
     var isBusy: Bool { !segments.isEmpty }
@@ -27,9 +29,10 @@ final class StreamingAudioPlayer {
         engine.attach(node)
         engine.connect(node, to: engine.mainMixerNode, format: format)
     }
-    func start(_ id: String, subtitle: String, sampleRate: Int) {
+    func start(_ id: String, subtitle: String, sampleRate: Int, expression: String = "calm") {
         guard sampleRate == 32000, !segments.contains(where: { $0.id == id }) else { return }
-        segments.append(Segment(id, subtitle))
+        let segment = Segment(id, subtitle); segment.expression = expression
+        segments.append(segment)
     }
     func append(_ id: String, data: Data) {
         guard let segment = segments.first(where: { $0.id == id }), !segment.ended,
@@ -70,7 +73,7 @@ final class StreamingAudioPlayer {
                 }
             }
         }
-        if !segment.began { segment.began = true; onBegan?(segment.subtitle) }
+        if !segment.began { segment.began = true; onSegmentBegan?(segment.expression); onBegan?(segment.subtitle) }
         if !node.isPlaying { node.play() }
     }
     func finishOpenSegments() {

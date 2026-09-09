@@ -1,0 +1,31 @@
+{
+  "version": "1.11.0",
+  "python_tests": 36,
+  "native_harnesses": [
+    "BoardRefresh",
+    "Lesson",
+    "Blackboard",
+    "PetBehavior"
+  ],
+  "live_market": {
+    "symbol": "NVDA",
+    "as_of": "2026-09-08",
+    "daily_rows": 120
+  },
+  "live_model_board": {
+    "fallback": false,
+    "caption_count": 3
+  },
+  "ui_verified": [
+    "single settings gear",
+    "spinner-only loading",
+    "stock candles",
+    "area chart menu"
+  ],
+  "teaching_frames": {
+    "teaching-pointer-up.png": "26b4c8711398c7427e68e69bb728e0f51ca04437e2116da9726cf39d3ad0872f",
+    "teaching-pointer-level-right.png": "5396556be103056932a535c2cb88868ec16dfd5915718cc49e73979a026b2ae7",
+    "teaching-pointer-up-right.png": "4e0d700adbdc9923eedc9f88a5d6169c909aceaffcf1bac36b117df45d965d51",
+    "teaching-pointer-level.png": "7430088bf12bd8b8685d3c34be4e659e29385a0754f3ca6297a14ba33adf1f14"
+  }
+}

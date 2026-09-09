@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -31,16 +32,42 @@ def launch_args():
     return args
 
 
+class CodexAuthError(ValueError):
+    pass
+
+
+def credential_revision():
+    # File metadata only: credentials stay entirely inside the official Codex client.
+    path=Path(os.environ.get('CODEX_HOME') or str(Path.home()/'.codex'))/'auth.json'
+    try:
+        value=path.stat()
+        return (value.st_ino,value.st_mtime_ns,value.st_size)
+    except OSError:
+        return None
+
+
+def auth_failure(error):
+    value=json.dumps(error,ensure_ascii=False).lower()
+    return bool(re.search(r'\b401\b',value)) or any(marker in value for marker in (
+        'token_revoked','invalidated oauth','unauthorized','signed in to another account',
+        'since logged out','refresh_token_reused','refresh_token_expired'))
+
+
 class CodexChat:
-    def __init__(self):
+    def __init__(self, args=None, cwd=None, log_name="codex-chat.log", request_handler=None, notification_handler=None):
         self.pending = {}; self.lock = threading.Lock(); self.serial = 0
+        self.auth_invalidated=False;self.login_revision=credential_revision()
         self.events = {}; self.closed = False
-        self.cwd = ROOT / 'runtime/chat-empty'; self.cwd.mkdir(parents=True, exist_ok=True)
-        self.log = (ROOT / 'runtime/codex-chat.log').open('a')
+        self.request_handler = request_handler; self.notification_handler = notification_handler
+        self.cwd = Path(cwd) if cwd else ROOT / 'runtime/chat-empty'; self.cwd.mkdir(parents=True, exist_ok=True)
+        self.log = (ROOT / 'runtime' / log_name).open('a')
         env = dict(os.environ)
+        executable = Path((args or launch_args())[0]).resolve()
+        # Desktop-distributed CLI companions live next to the actual binary, not its PATH symlink.
+        env['PATH'] = str(executable.parent) + os.pathsep + env.get('PATH','')
         for key in ('OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_THREAD_ID'):
             env.pop(key, None)
-        self.process = subprocess.Popen(launch_args(), cwd=self.cwd, env=env,
+        self.process = subprocess.Popen(args if args is not None else launch_args(), cwd=self.cwd, env=env,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log,
             text=True, bufsize=1)
         threading.Thread(target=self._read, daemon=True).start()
@@ -59,6 +86,14 @@ class CodexChat:
         except Exception:
             self.close(); raise
 
+    def needs_reconnect(self):
+        return self.closed or self.auth_invalidated or self.process.poll() is not None or self.login_revision != credential_revision()
+
+    def check_auth_error(self,error):
+        if auth_failure(error):
+            self.auth_invalidated=True
+            raise CodexAuthError('Codex 登录已失效或账号已切换。请确认新账号已登录，再发送一次以重新连接。')
+
     def _write(self, value):
         with self.lock:
             if self.closed: raise ValueError('Codex 连接已关闭，请重试。')
@@ -76,6 +111,7 @@ class CodexChat:
             try: message = reply.get(timeout=timeout)
             except queue.Empty: raise ValueError('Codex 响应超时，请检查网络后重试。')
             if 'error' in message:
+                self.check_auth_error(message['error'])
                 # Full errors can contain prompt/config data; keep them out of UI/logs.
                 raise ValueError('Codex 请求失败，请检查登录状态、网络或额度后重试。')
             return message['result']
@@ -90,14 +126,20 @@ class CodexChat:
                     with self.lock: reply = self.pending.get(message['id'])
                     if reply: reply.put(message)
                 elif 'id' in message:
-                    # No client tool, permission, or user-input requests are authorized
-                    # by a persona chat. Reject unexpected requests, never auto-approve.
-                    self._write({'id':message['id'], 'error':{'code':-32601,
-                        'message':'This conversation supports text replies only.'}})
+                    if self.request_handler:
+                        threading.Thread(target=self.request_handler, args=(message,), daemon=True).start()
+                    else:
+                        self._write({'id':message['id'], 'error':{'code':-32601,
+                            'message':'This conversation supports text replies only.'}})
                 else:
                     params = message.get('params') or {}
+                    if message.get('method') in ('account/updated','account/login/completed'):
+                        self.auth_invalidated=True
+                    error=params.get('error') or (params.get('turn') or {}).get('error')
+                    if error and auth_failure(error): self.auth_invalidated=True
                     target = self.events.get(params.get('threadId'))
                     if target: target.put(message)
+                    if self.notification_handler: self.notification_handler(message)
         except (OSError, ValueError):
             pass
         finally:
@@ -138,6 +180,7 @@ class CodexChat:
                     completed = True
                     if params['turn']['status'] != 'completed':
                         error = params['turn'].get('error') or {}
+                        self.check_auth_error(error)
                         code = error.get('codexErrorInfo')
                         if code in ('usageLimitExceeded', 'rateLimitExceeded'):
                             raise ValueError('Codex 额度或速率受限，请稍后再试。')

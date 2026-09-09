@@ -153,6 +153,149 @@
       "durations": [
         0.2
       ]
+    },
+    "chat-thinking": {
+      "label": "聊天 · 托腮思考",
+      "frames": [
+        "frames/working-a.png",
+        "frames/working-b.png"
+      ],
+      "durations": [
+        2.4,
+        1.4
+      ]
+    },
+    "chat-listening": {
+      "label": "聊天 · 专注倾听",
+      "frames": [
+        "frames/review-a.png"
+      ],
+      "durations": [
+        1
+      ]
+    },
+    "chat-speaking": {
+      "label": "聊天 · 自然回复",
+      "frames": [
+        "frames/master.png",
+        "frames/blink.png",
+        "frames/master.png"
+      ],
+      "durations": [
+        3.8,
+        0.15,
+        1.3
+      ]
+    },
+    "chat-nod": {
+      "label": "聊天 · 轻轻点头",
+      "frames": [
+        "frames/master.png",
+        "frames/look-down.png",
+        "frames/master.png"
+      ],
+      "durations": [
+        0.2,
+        0.4,
+        1.2
+      ]
+    },
+    "chat-shy": {
+      "label": "聊天 · 害羞侧目",
+      "frames": [
+        "frames/look-left.png"
+      ],
+      "durations": [
+        1
+      ]
+    },
+    "teaching-explain": {
+      "label": "授课 · 教鞭讲解",
+      "frames": [
+        "frames/teaching-pointer-up.png",
+        "frames/teaching-pointer-level.png"
+      ],
+      "durations": [
+        2.4,
+        3.2
+      ]
+    },
+    "teaching-point": {
+      "label": "授课 · 教鞭讲解",
+      "frames": [
+        "frames/teaching-pointer-up.png",
+        "frames/teaching-pointer-level.png"
+      ],
+      "durations": [
+        2.4,
+        3.2
+      ]
+    },
+    "teaching-point-right": {
+      "label": "授课 · 教鞭讲解（向右）",
+      "frames": [
+        "frames/teaching-pointer-up-right.png",
+        "frames/teaching-pointer-level-right.png"
+      ],
+      "durations": [
+        2.4,
+        3.2
+      ]
+    },
+    "teaching-emphasize": {
+      "label": "授课 · 教鞭强调",
+      "frames": [
+        "frames/teaching-pointer-up.png",
+        "frames/teaching-pointer-level.png"
+      ],
+      "durations": [
+        2.4,
+        3.2
+      ]
+    },
+    "teaching-present": {
+      "label": "授课 · 教鞭讲解",
+      "frames": [
+        "frames/teaching-pointer-up.png",
+        "frames/teaching-pointer-level.png"
+      ],
+      "durations": [
+        2.4,
+        3.2
+      ]
+    },
+    "teaching-explain-right": {
+      "label": "授课 · 教鞭讲解（向右）",
+      "frames": [
+        "frames/teaching-pointer-up-right.png",
+        "frames/teaching-pointer-level-right.png"
+      ],
+      "durations": [
+        2.4,
+        3.2
+      ]
+    },
+    "teaching-present-right": {
+      "label": "授课 · 教鞭讲解（向右）",
+      "frames": [
+        "frames/teaching-pointer-up-right.png",
+        "frames/teaching-pointer-level-right.png"
+      ],
+      "durations": [
+        2.4,
+        3.2
+      ]
+    },
+    "teaching-emphasize-right": {
+      "label": "授课 · 教鞭强调（向右）",
+      "frames": [
+        "frames/teaching-pointer-up-right.png",
+        "frames/teaching-pointer-level-right.png"
+      ],
+      "durations": [
+        2.4,
+        3.2
+      ]
     }
   }
 }

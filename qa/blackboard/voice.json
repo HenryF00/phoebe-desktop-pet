@@ -1,0 +1,8 @@
+{
+  "request_id": "qa-narration",
+  "subtitle": "先确认期间、币种和合并口径一致；这里全部是虚构演示数据。\n营收增长不等于利润增长，本例中研发与渠道建设增加了费用。\n缺少现金流，不能判断回款质量或估值；下一步看经营现金流和费用明细。",
+  "duration": 37.04,
+  "sample_rate": 32000,
+  "generation_seconds": 15.35,
+  "audio_path": "${PROJECT_ROOT}/runtime/blackboard-demo.wav"
+}

@@ -21,10 +21,11 @@ def main():
     shutil.copy2(ROOT / 'config/Info.plist', app / 'Info.plist')
     shutil.copy2(ROOT / 'assets/pet/animations.json', app / 'Resources/animations.json')
     shutil.copytree(ROOT / 'assets/pet/frames', app / 'Resources/frames', dirs_exist_ok=True)
+    if (ROOT / 'assets/fonts').exists():
+        shutil.copytree(ROOT / 'assets/fonts', app / 'Resources/fonts', dirs_exist_ok=True)
     (app / 'Resources/project-root.txt').write_text(str(ROOT))
     subprocess.run(['codesign', '--force', '--deep', '--sign', '-', str(app.parent)], check=True)
     print(app.parent)
 
 if __name__ == '__main__':
     main()
-

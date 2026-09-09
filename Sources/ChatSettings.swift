@@ -7,6 +7,8 @@ final class SettingsBackground: NSView {
 
 struct ChatPreferences: Equatable {
     var provider = "codex"
+    var taskDelivery = "auto"
+    var boardSpeech = true
     var subtitleLanguage = "zh"
     var voiceLanguage = "ja"
     var codexModel = ""
@@ -15,15 +17,17 @@ struct ChatPreferences: Equatable {
         let d = UserDefaults.standard.dictionary(forKey: "chatPreferences") ?? [:]
         var p = ChatPreferences()
         if let v=d["provider"] as? String, ["codex","deepseek"].contains(v) { p.provider=v }
-        if let v=d["subtitle_language"] as? String, ["zh","en"].contains(v) { p.subtitleLanguage=v }
+        if let v=d["subtitle_language"] as? String, ["zh","en","ja"].contains(v) { p.subtitleLanguage=v }
         if let v=d["voice_language"] as? String, ["zh","en","ja"].contains(v) { p.voiceLanguage=v }
+        p.taskDelivery = d["task_delivery"] as? String == "manual" ? "manual":"auto"
+        p.boardSpeech = d["board_speech"] as? String != "false"
         p.codexModel = d["codex_model"] as? String ?? ""
         p.deepseekModel = d["deepseek_model"] as? String ?? "deepseek-v4-flash"
         return p
     }
     var payload: [String: String] {
         ["provider":provider, "subtitle_language":subtitleLanguage, "voice_language":voiceLanguage,
-         "codex_model":codexModel, "deepseek_model":deepseekModel]
+         "codex_model":codexModel, "deepseek_model":deepseekModel, "task_delivery":taskDelivery,"board_speech":boardSpeech ? "true":"false"]
     }
     func save() { UserDefaults.standard.set(payload, forKey: "chatPreferences") }
 }
@@ -72,6 +76,7 @@ final class ChatSettingsController: NSObject, NSWindowDelegate {
     var deepseekRows: NSStackView!
     var onSave: ((ChatPreferences) -> Void)?
     var onPreview: (() -> Void)?
+    var onMemory: (() -> Void)?
     var onReset: (() -> Void)?
     var persist: (ChatPreferences) -> Void = { $0.save() }
     var saveKey: (String) throws -> Void = DeepSeekKeychain.save
@@ -81,7 +86,7 @@ final class ChatSettingsController: NSObject, NSWindowDelegate {
         super.init()
         window.contentView=SettingsBackground(frame:NSRect(x:0,y:0,width:520,height:500))
         window.title="洛琪希 · 设置";window.isReleasedWhenClosed=false;window.delegate=self;window.center()
-        caption.addItems(withTitles:["中文","English"])
+        caption.addItems(withTitles:["中文","English","日本語"])
         speech.addItems(withTitles:["日语","中文","English"])
         provider.addItems(withTitles:["Codex · 订阅账号","DeepSeek · API Key"])
         provider.target=self;provider.action=#selector(providerChanged)
@@ -103,7 +108,8 @@ final class ChatSettingsController: NSObject, NSWindowDelegate {
         let save=NSButton(title:"保存",target:self,action:#selector(saveSettings));save.bezelStyle = .rounded;save.keyEquivalent="\r"
         let preview=NSButton(title:"保存并试听声音",target:self,action:#selector(previewVoice));preview.bezelStyle = .rounded
         let reset=NSButton(title:"新对话",target:self,action:#selector(resetChat));reset.bezelStyle = .rounded
-        let buttons=NSStackView(views:[reset,NSView(),preview,save]);buttons.orientation = .horizontal;buttons.spacing=8
+        let memory=NSButton(title:"记住的事…",target:self,action:#selector(showMemory));memory.bezelStyle = .rounded
+        let buttons=NSStackView(views:[reset,memory,NSView(),preview,save]);buttons.orientation = .horizontal;buttons.spacing=8
         let title=NSTextField(labelWithString:"让洛琪希按你的习惯说话")
         title.font = .systemFont(ofSize:21,weight:.semibold)
         let stack=NSStackView(views:[title,row("字幕语言",caption),row("语音语言",speech),hint,
@@ -127,7 +133,7 @@ final class ChatSettingsController: NSObject, NSWindowDelegate {
         return row
     }
     func load(_ prefs:ChatPreferences) {
-        caption.selectItem(at:prefs.subtitleLanguage == "en" ? 1:0)
+        caption.selectItem(at:["zh","en","ja"].firstIndex(of:prefs.subtitleLanguage) ?? 0)
         speech.selectItem(at:["ja","zh","en"].firstIndex(of:prefs.voiceLanguage) ?? 0)
         provider.selectItem(at:prefs.provider == "deepseek" ? 1:0)
         codexModel.stringValue=prefs.codexModel;deepseekModel.stringValue=prefs.deepseekModel
@@ -141,8 +147,8 @@ final class ChatSettingsController: NSObject, NSWindowDelegate {
         window.contentView?.layoutSubtreeIfNeeded()
     }
     @discardableResult @objc func saveSettings() -> Bool {
-        var prefs=ChatPreferences()
-        prefs.subtitleLanguage=caption.indexOfSelectedItem == 1 ? "en":"zh"
+        var prefs=ChatPreferences.load()
+        prefs.subtitleLanguage=["zh","en","ja"][max(0,caption.indexOfSelectedItem)]
         prefs.voiceLanguage=["ja","zh","en"][max(0,speech.indexOfSelectedItem)]
         prefs.provider=provider.indexOfSelectedItem == 1 ? "deepseek":"codex"
         prefs.codexModel=codexModel.stringValue.trimmingCharacters(in:.whitespacesAndNewlines)
@@ -161,6 +167,7 @@ final class ChatSettingsController: NSObject, NSWindowDelegate {
         do { try DeepSeekKeychain.clear();key.stringValue="";status.stringValue="已清除 DeepSeek 密钥。" }
         catch { status.stringValue=error.localizedDescription }
     }
+    @objc func showMemory() { onMemory?() }
     @objc func resetChat() { onReset?();status.stringValue="已开始新对话，历史记录保留。" }
     func windowWillClose(_ notification:Notification) { key.stringValue="" }
 }
