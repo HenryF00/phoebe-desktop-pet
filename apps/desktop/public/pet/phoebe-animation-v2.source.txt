@@ -6,8 +6,8 @@ Runtime canvas: 1004 x 1567 RGBA, transparent, fixed bottom anchor
 
 Final asset directions
 
-1. Exact chat blink
-Close only both eyes on the canonical chat idle image. Preserve the complete pose, silhouette, scale, baseline and alpha. The generated eye source was composited through two feathered eye masks; the idle alpha channel was restored exactly. All changed pixels are restricted to x=445..609, y=166..250.
+1. Exact chat and assistant blinks
+Close only both eyes on each canonical idle image. Preserve the complete pose, silhouette, scale, baseline and alpha. Each generated eye source was composited through two feathered eye masks; the matching idle alpha channel was restored exactly. The chat changes remain restricted to x=445..609, y=166..250. The assistant changes remain restricted to x=558..766, y=165..251.
 
 2. Chat wave preparation and peak
 Transition naturally from clasped idle through a partially raised empty hand to a friendly open-palm wave. Exactly two hands and no staff, wand, weapon, prop, effect or duplicate character. Preserve the fixed canvas, identity, costume, scale and baseline.
@@ -22,6 +22,7 @@ Focused forward staff-pointing pose. Both hands correctly grip one continuous co
 Shy uses a soft side glance, gentle closed-mouth smile, slight blush and clasped hands. Concerned uses only mild reassuring concern, one hand near the collarbone and one near the waist. Both are staff-free with exactly two hands.
 
 Final v2 assets
+- phoebe-assistant-blink-v2.png
 - phoebe-chat-blink-v2.png
 - phoebe-chat-wave-prep-v2.png
 - phoebe-chat-wave-v2.png
@@ -32,6 +33,6 @@ Final v2 assets
 
 QA
 - Every runtime asset is normalized to 1004 x 1567 RGBA with transparent corners.
-- The repaired chat blink alpha channel is byte-identical to chat idle.
+- Both repaired blink alpha channels are byte-identical to their matching idle frames.
 - One-shot wave order is idle -> preparation -> wave -> preparation -> idle.
 - Automatic wave is gated by 120 seconds of uninterrupted idle state.

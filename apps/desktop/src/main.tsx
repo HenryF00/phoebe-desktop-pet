@@ -1302,7 +1302,7 @@ function PetApp() {
         <div className={`pet-preview-stage is-${previewSurface}`} aria-label={`${previewSurface === "dark" ? "深色" : "浅色"}桌面背景预览`}>
           <div className={`pet-preview-window${iconized ? " is-iconized" : ""}`}>{petCard}</div>
           <div className="preview-face-detail" aria-label="表情局部近景">
-            <div className="preview-face-crop"><img src={previewPose === "blink" ? "/pet/phoebe-assistant-blink-v1.png" : previewPose === "wave" ? "/pet/phoebe-assistant-wave-v1.png" : "/pet/phoebe-assistant-idle-v1.png"}
+            <div className="preview-face-crop"><img src={previewPose === "blink" ? "/pet/phoebe-assistant-blink-v2.png" : previewPose === "wave" ? "/pet/phoebe-assistant-wave-v1.png" : "/pet/phoebe-assistant-idle-v1.png"}
               alt={previewPose === "blink" ? "菲比闭眼表情近景" : previewPose === "wave" ? "菲比挥手表情近景" : "菲比待机表情近景"} draggable={false} /></div>
             <span>表情近景</span>
           </div>

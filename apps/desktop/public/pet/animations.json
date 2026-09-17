@@ -4,17 +4,17 @@
   "clips": {
     "assistant-idle": { "loop": true, "motion": "breathe", "frames": [
       { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 3600 },
-      { "src": "/pet/phoebe-assistant-blink-v1.png", "durationMs": 135 },
+      { "src": "/pet/phoebe-assistant-blink-v2.png", "durationMs": 135 },
       { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 175 },
-      { "src": "/pet/phoebe-assistant-blink-v1.png", "durationMs": 105 },
+      { "src": "/pet/phoebe-assistant-blink-v2.png", "durationMs": 105 },
       { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 2450 }
     ] },
     "assistant-blink": { "loop": false, "motion": "still", "holdLastMs": 500, "frames": [
-      { "src": "/pet/phoebe-assistant-blink-v1.png", "durationMs": 500 }
+      { "src": "/pet/phoebe-assistant-blink-v2.png", "durationMs": 500 }
     ] },
     "assistant-thinking": { "loop": true, "motion": "thinking", "frames": [
       { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 1400 },
-      { "src": "/pet/phoebe-assistant-blink-v1.png", "durationMs": 135 },
+      { "src": "/pet/phoebe-assistant-blink-v2.png", "durationMs": 135 },
       { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 1100 }
     ] },
     "assistant-tool": { "loop": true, "motion": "tool", "frames": [
@@ -27,7 +27,7 @@
     ] },
     "assistant-speaking": { "loop": true, "motion": "speaking", "frames": [
       { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 1250 },
-      { "src": "/pet/phoebe-assistant-blink-v1.png", "durationMs": 120 },
+      { "src": "/pet/phoebe-assistant-blink-v2.png", "durationMs": 120 },
       { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 850 }
     ] },
     "assistant-nod": { "loop": false, "motion": "nod-once", "holdLastMs": 280, "frames": [
