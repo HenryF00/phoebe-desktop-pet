@@ -69,7 +69,7 @@ export type VoiceRequest =
 export interface SystemStatus {
   platform: string;
   agent: "not_configured" | "ready" | "failed";
-  voice: "not_configured" | "ready" | "failed";
+  voice: "not_configured" | "starting" | "ready" | "failed";
   version: string;
 }
 

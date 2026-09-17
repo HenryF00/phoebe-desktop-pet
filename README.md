@@ -52,10 +52,12 @@ ver0.1 当前以 **macOS Apple Silicon** 为主要验收环境；代码保留 Wi
 ### 语音
 
 - 已接入本机 GPT-SoVITS `api_v2.py` 动态中文 TTS。
+- 发布包内置与当前平台匹配的 Python 环境、GPT-SoVITS 推理代码、基础模型和菲比 e15/e8 权重；安装后不需要另开终端。
+- Rust 会先检测 `127.0.0.1:9880`：已有健康服务时直接复用，否则自动展开并启动内置服务；退出时只关闭由本次应用启动的子进程。
 - 助手模式只朗读简短结论；聊天模式完整朗读简短回答。
 - 每条已完成回复都提供简单的重播按钮。
 - 支持停止播放、丢弃过期合成结果，并在播放结束后删除临时 WAV。
-- 安装包只携带一段推理参考音频，不包含 GPT-SoVITS 环境、训练数据或模型权重。
+- 第一次启用语音会在应用数据目录完成校验和展开，后续启动直接复用；训练数据不会进入安装包。
 
 详细启动与权重配置见 [菲比本机动态语音](docs/phoebe-voice.md)。
 
@@ -68,7 +70,7 @@ ver0.1 当前以 **macOS Apple Silicon** 为主要验收环境；代码保留 Wi
 - Rust stable 工具链
 - Tauri 2 在目标系统上的构建依赖
 - DeepSeek API Key
-- 可选：本机 GPT-SoVITS API，用于动态语音
+- 仅发布构建者需要：目标平台上的 GPT-SoVITS Conda 环境、e15/e8 权重和 `conda-pack`
 
 ### 安装依赖
 
@@ -112,7 +114,9 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 npm run tauri:build -w @phoebe/desktop
 ```
 
-release 构建会打包固定的 Node Sidecar、编译后的 Agent、Node 许可文件和 TTS 参考音频。
+release 构建会打包固定的 Node Sidecar、编译后的 Agent、Node 许可文件、参考音频，以及与**构建平台和 CPU 架构一致**的 GPT-SoVITS 离线运行包。默认来源是相邻目录 `../GPT-SoVITS` 和 `~/miniconda3/envs/GPTSoVits`；也可通过 `PHOEBE_GPTSOVITS_ROOT`、`PHOEBE_GPTSOVITS_ENV` 和 `PHOEBE_GPTSOVITS_PYTHON` 指定。生成的多 GB 归档位于 Git 忽略的 `apps/desktop/src-tauri/resources/voice-runtime/`。
+
+macOS 构建产出 `.app` 和压缩 DMG；Windows 构建产出 NSIS 安装程序。语音运行包包含原生依赖，必须分别在 macOS Apple Silicon 和目标 Windows x64 机器上构建，不能把 macOS 归档直接用于 Windows。
 
 ## 项目结构
 
@@ -133,7 +137,8 @@ phoebe_voice_zh/              语音元数据与打包所需的单段参考音�
 
 - 尚未完成 Apple Developer ID 签名、公证和自动更新。
 - Windows 构建与 Credential Manager 需要进一步实机验收。
-- GPT-SoVITS 推理环境和 e15/e8 权重需要用户在本机单独启动。
+- 首次语音展开和 CPU 模型加载较慢，并额外占用约 4～5 GB 应用数据空间；当前未提供自动清理旧运行包的界面。
+- macOS 内置语音已完成真实安装包验收；Windows 管理与打包路径已实现，但仍需 Windows x64 实机生成运行包并验收。
 - 定位能力仍受 macOS WebView 与系统权限限制。
 - 联网搜索依赖外部搜索页面，可能遇到限流、验证页或网络超时。
 - 尚未接入语音输入、ASR、免提抢话和回声消除。

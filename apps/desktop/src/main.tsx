@@ -239,7 +239,7 @@ function SettingsApp() {
     setAutostartBusy(true); setNotice("");
     try {
       setAutostart(await invoke<AutostartStatus>("set_autostart", { enabled }));
-      setNotice(enabled ? "已登记开机启动。登录时只恢复桌宠，不会预载语音。" : "已关闭开机启动。");
+      setNotice(enabled ? "已登记开机启动。登录后会恢复桌宠，并在语音开启时后台预热内置声音。" : "已关闭开机启动。");
     } catch { setNotice("无法更新系统登录项。请检查系统权限后重试，原状态保持不变。"); }
     finally { setAutostartBusy(false); }
   }
@@ -342,7 +342,7 @@ function SettingsApp() {
           </fieldset>
         </form>
         <fieldset className="settings-group"><legend>启动</legend>
-          <label className="setting-switch"><input type="checkbox" checked={autostart.enabled} onChange={event => void changeAutostart(event.target.checked)} disabled={!inTauri || !autostart.available || autostartBusy || loading} /><span><strong>开机启动</strong><small>{autostart.available ? "登录时仅打开桌宠，不预载语音模块。" : "当前构建未生成正式安装包；登录项暂不可用。"}</small></span></label>
+          <label className="setting-switch"><input type="checkbox" checked={autostart.enabled} onChange={event => void changeAutostart(event.target.checked)} disabled={!inTauri || !autostart.available || autostartBusy || loading} /><span><strong>开机启动</strong><small>{autostart.available ? "登录时恢复桌宠；语音开启时会在后台预热内置声音。" : "当前构建未生成正式安装包；登录项暂不可用。"}</small></span></label>
         </fieldset>
         <MemorySection onDirtyChange={setMemoryDirty} resetToken={memoryResetToken} />
         <fieldset className="settings-group"><legend>菲比语音</legend>
@@ -352,9 +352,9 @@ function SettingsApp() {
           <div className="voice-baseline"><span><strong>基线</strong><small>GPT e15 · SoVITS e8 · 中文 · 凑四句一切</small></span>
             <button type="button" onClick={() => void checkVoice()} disabled={!inTauri || voiceBusy}>{voiceBusy ? "检测中…" : "检测服务"}</button></div>
           <p className={`voice-diagnostic ${voiceDiagnostic?.status === "ready" || (!voiceDiagnostic && status?.voice === "ready") ? "is-ready" : voiceDiagnostic?.status === "failed" ? "is-error" : ""}`} role="status">
-            {voiceDiagnostic?.message || (status?.voice === "ready" ? "本机语音 API 已就绪。" : "需先在 127.0.0.1:9880 启动 api_v2.py，并加载指定模型。")}
+            {voiceDiagnostic?.message || (status?.voice === "ready" ? "内置菲比语音已就绪。" : status?.voice === "starting" ? "正在后台准备内置菲比语音，首次启动需要稍候。" : "安装包会自动准备并启动内置菲比语音；首次使用需要解压模型。")}
           </p>
-          <p className="field-help">不会朗读 Markdown 标记、网址、代码或文件路径。参考音频：021_自我介绍.wav。训练权重和推理环境不会打进应用；关闭此开关不影响文字聊天。</p>
+          <p className="field-help">不会朗读 Markdown 标记、网址、代码或文件路径。安装包包含 GPT-SoVITS 推理环境、GPT e15、SoVITS e8 和参考音频；首次启动会解压到本机应用数据目录。关闭此开关不影响文字聊天。</p>
         </fieldset>
         <fieldset className="settings-group is-pending" disabled><legend>角色模型</legend><p>本机角色图已加入眨眼、轻摆和挥手原型；Live2D 分层模型仍未接入。</p></fieldset>
       </div>

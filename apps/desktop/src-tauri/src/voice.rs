@@ -1,7 +1,12 @@
 use reqwest::blocking::Client;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::{
-    fs,
+    env,
+    fs::{self, File, OpenOptions},
+    io::Read,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
@@ -9,7 +14,7 @@ use std::{
         Arc, Mutex,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 #[cfg(not(debug_assertions))]
 use tauri::path::BaseDirectory;
@@ -23,6 +28,9 @@ const REFERENCE_NAME: &str = "021_自我介绍.wav";
 const REFERENCE_TEXT: &str = "我是隐海修会的教士，菲比。岁主在上，愿你的旅途永远有爱与光明垂耀。";
 const MAX_SPEECH_BYTES: usize = 12_000;
 const MAX_WAV_BYTES: usize = 64 * 1024 * 1024;
+#[cfg_attr(debug_assertions, allow(dead_code))]
+const VOICE_RUNTIME_FORMAT: u8 = 1;
+const SERVER_START_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Serialize)]
 pub struct VoiceEvent {
@@ -71,10 +79,47 @@ struct Playback {
     path: PathBuf,
 }
 
+struct ManagedServer {
+    child: Child,
+    log_path: PathBuf,
+}
+
+#[cfg_attr(debug_assertions, allow(dead_code))]
+#[derive(Deserialize)]
+struct ArchiveResource {
+    file: String,
+    sha256: String,
+}
+
+#[cfg_attr(debug_assertions, allow(dead_code))]
+#[derive(Deserialize)]
+struct VoiceRuntimeManifest {
+    format: u8,
+    runtime_id: String,
+    platform: String,
+    architecture: String,
+    python_archive: ArchiveResource,
+    project_archive: ArchiveResource,
+    api_script: String,
+    config: String,
+    gpt_weight: String,
+    sovits_weight: String,
+}
+
+struct RuntimeLayout {
+    root: PathBuf,
+    project: PathBuf,
+    python: PathBuf,
+    api_script: PathBuf,
+    config: PathBuf,
+}
+
 pub struct VoiceService {
     generation: AtomicU64,
     status: Mutex<&'static str>,
     playback: Mutex<Option<Playback>>,
+    server: Mutex<Option<ManagedServer>>,
+    startup: Mutex<()>,
 }
 
 impl Default for VoiceService {
@@ -83,6 +128,8 @@ impl Default for VoiceService {
             generation: AtomicU64::new(0),
             status: Mutex::new("not_configured"),
             playback: Mutex::new(None),
+            server: Mutex::new(None),
+            startup: Mutex::new(()),
         }
     }
 }
@@ -94,6 +141,281 @@ fn client(timeout: Duration) -> Result<Client, String> {
         .timeout(timeout)
         .build()
         .map_err(|_| "无法建立本机语音连接".into())
+}
+
+fn health_ready(timeout: Duration) -> bool {
+    client(timeout)
+        .and_then(|client| {
+            client
+                .get(HEALTH_ENDPOINT)
+                .send()
+                .map_err(|_| "unreachable".to_owned())?
+                .error_for_status()
+                .map_err(|_| "unhealthy".to_owned())?;
+            Ok(())
+        })
+        .is_ok()
+}
+
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn valid_runtime_component(value: &str) -> bool {
+    !value.is_empty()
+        && !Path::new(value).is_absolute()
+        && Path::new(value).components().all(|component| {
+            matches!(
+                component,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        })
+}
+
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn validate_manifest(manifest: &VoiceRuntimeManifest) -> Result<(), String> {
+    if manifest.format != VOICE_RUNTIME_FORMAT
+        || manifest.platform != std::env::consts::OS
+        || manifest.architecture != std::env::consts::ARCH
+        || manifest.runtime_id.len() > 160
+        || !valid_runtime_component(&manifest.runtime_id)
+        || !valid_runtime_component(&manifest.python_archive.file)
+        || !valid_runtime_component(&manifest.project_archive.file)
+        || !valid_runtime_component(&manifest.api_script)
+        || !valid_runtime_component(&manifest.config)
+        || !valid_runtime_component(&manifest.gpt_weight)
+        || !valid_runtime_component(&manifest.sovits_weight)
+        || manifest.python_archive.sha256.len() != 64
+        || manifest.project_archive.sha256.len() != 64
+    {
+        return Err("内置语音运行包与当前系统不兼容，请重新安装正确版本".into());
+    }
+    Ok(())
+}
+
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
+    let mut file = File::open(path).map_err(|_| "无法读取内置语音运行包")?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .map_err(|_| "无法校验内置语音运行包")?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    if format!("{:x}", digest.finalize()) != expected {
+        return Err("内置语音运行包校验失败，请重新安装应用".into());
+    }
+    Ok(())
+}
+
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn extract_targz(archive_path: &Path, destination: &Path) -> Result<(), String> {
+    let file = File::open(archive_path).map_err(|_| "无法打开内置语音运行包")?;
+    let decoder = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(decoder);
+    let entries = archive.entries().map_err(|_| "内置语音运行包格式无效")?;
+    for entry in entries {
+        let mut entry = entry.map_err(|_| "内置语音运行包包含损坏条目")?;
+        let unpacked = entry
+            .unpack_in(destination)
+            .map_err(|_| "无法解压内置语音运行包")?;
+        if !unpacked {
+            return Err("内置语音运行包包含不安全路径".into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn python_executable(runtime_root: &Path) -> PathBuf {
+    if cfg!(windows) {
+        runtime_root.join("python/python.exe")
+    } else {
+        runtime_root.join("python/bin/python")
+    }
+}
+
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn runtime_layout(root: PathBuf, manifest: &VoiceRuntimeManifest) -> RuntimeLayout {
+    let project = root.join("gpt-sovits");
+    RuntimeLayout {
+        python: python_executable(&root),
+        api_script: root.join(&manifest.api_script),
+        config: root.join(&manifest.config),
+        project,
+        root,
+    }
+}
+
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn validate_layout(layout: &RuntimeLayout, manifest: &VoiceRuntimeManifest) -> Result<(), String> {
+    let required = [
+        &layout.python,
+        &layout.api_script,
+        &layout.config,
+        &layout.project.join(&manifest.gpt_weight),
+        &layout.project.join(&manifest.sovits_weight),
+    ];
+    if required.iter().any(|path| !path.is_file()) {
+        return Err("内置语音运行包缺少 Python、模型或推理文件".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(debug_assertions))]
+fn prepare_bundled_runtime(app: &AppHandle) -> Result<RuntimeLayout, String> {
+    let resource_dir = app
+        .path()
+        .resolve("voice-runtime", BaseDirectory::Resource)
+        .map_err(|_| "无法定位内置语音运行包")?;
+    let manifest_path = resource_dir.join("manifest.json");
+    let manifest: VoiceRuntimeManifest =
+        serde_json::from_slice(&fs::read(&manifest_path).map_err(|_| "内置语音运行清单缺失")?)
+            .map_err(|_| "内置语音运行清单格式无效")?;
+    validate_manifest(&manifest)?;
+
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "无法取得本机应用数据目录")?
+        .join("voice-runtime");
+    fs::create_dir_all(&data_dir).map_err(|_| "无法建立本机语音运行目录")?;
+    let destination = data_dir.join(&manifest.runtime_id);
+    let ready_marker = destination.join(".ready");
+    if ready_marker.is_file() {
+        let layout = runtime_layout(destination, &manifest);
+        validate_layout(&layout, &manifest)?;
+        return Ok(layout);
+    }
+
+    let python_archive = resource_dir.join(&manifest.python_archive.file);
+    let project_archive = resource_dir.join(&manifest.project_archive.file);
+    verify_sha256(&python_archive, &manifest.python_archive.sha256)?;
+    verify_sha256(&project_archive, &manifest.project_archive.sha256)?;
+
+    let staging = data_dir.join(format!(
+        ".installing-{}-{}",
+        std::process::id(),
+        manifest.runtime_id
+    ));
+    if staging.exists() {
+        fs::remove_dir_all(&staging).map_err(|_| "无法清理未完成的语音安装目录")?;
+    }
+    fs::create_dir_all(staging.join("python")).map_err(|_| "无法建立语音安装暂存目录")?;
+    let install_result = (|| {
+        extract_targz(&python_archive, &staging.join("python"))?;
+        extract_targz(&project_archive, &staging)?;
+        let layout = runtime_layout(staging.clone(), &manifest);
+        validate_layout(&layout, &manifest)?;
+        run_conda_unpack(&layout)?;
+        fs::write(staging.join(".ready"), manifest.runtime_id.as_bytes())
+            .map_err(|_| "无法写入语音安装完成标记")?;
+        Ok::<_, String>(())
+    })();
+    if let Err(error) = install_result {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+    if destination.exists() {
+        fs::remove_dir_all(&destination).map_err(|_| "无法替换损坏的语音运行目录")?;
+    }
+    fs::rename(&staging, &destination).map_err(|_| "无法完成内置语音运行环境安装")?;
+    let layout = runtime_layout(destination, &manifest);
+    validate_layout(&layout, &manifest)?;
+    Ok(layout)
+}
+
+#[cfg(not(debug_assertions))]
+fn run_conda_unpack(layout: &RuntimeLayout) -> Result<(), String> {
+    clear_development_path_file(&layout.root)?;
+    #[cfg(target_os = "windows")]
+    let mut command = Command::new(layout.root.join("python/Scripts/conda-unpack.exe"));
+    #[cfg(not(target_os = "windows"))]
+    let mut command = {
+        let mut value = Command::new(&layout.python);
+        value
+            .arg("-S")
+            .arg(layout.root.join("python/bin/conda-unpack"));
+        value
+    };
+    let output = command
+        .current_dir(&layout.root)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|_| "无法重定位内置 Python 环境")?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        let detail = detail.trim().chars().take(400).collect::<String>();
+        return Err(if detail.is_empty() {
+            "内置 Python 环境重定位失败，请重新安装应用".into()
+        } else {
+            format!("内置 Python 环境重定位失败：{detail}")
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(debug_assertions))]
+fn clear_development_path_file(runtime_root: &Path) -> Result<(), String> {
+    let windows_path = runtime_root.join("python/Lib/site-packages/users.pth");
+    if windows_path.exists() {
+        fs::write(windows_path, b"").map_err(|_| "无法清理 Python 开发环境路径")?;
+    }
+    let unix_lib = runtime_root.join("python/lib");
+    if unix_lib.is_dir() {
+        for entry in fs::read_dir(unix_lib).map_err(|_| "无法检查 Python 库目录")? {
+            let path = entry.map_err(|_| "无法检查 Python 库目录")?.path();
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("python"))
+            {
+                let users_path = path.join("site-packages/users.pth");
+                if users_path.exists() {
+                    fs::write(users_path, b"").map_err(|_| "无法清理 Python 开发环境路径")?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+fn prepare_bundled_runtime(_app: &AppHandle) -> Result<RuntimeLayout, String> {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let project = env::var_os("PHOEBE_GPTSOVITS_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest_dir.join("../../../../GPT-SoVITS"));
+    let environment = env::var_os("PHOEBE_GPTSOVITS_ENV")
+        .map(PathBuf::from)
+        .or_else(|| {
+            env::var_os("HOME").map(|home| PathBuf::from(home).join("miniconda3/envs/GPTSoVits"))
+        })
+        .ok_or_else(|| "未配置开发环境 PHOEBE_GPTSOVITS_ENV".to_owned())?;
+    let root = project.parent().unwrap_or(manifest_dir).to_path_buf();
+    let layout = RuntimeLayout {
+        python: if cfg!(windows) {
+            environment.join("python.exe")
+        } else {
+            environment.join("bin/python")
+        },
+        api_script: project.join("api_v2.py"),
+        config: project.join("GPT_SoVITS/configs/tts_infer.yaml"),
+        project,
+        root,
+    };
+    if [&layout.python, &layout.api_script, &layout.config]
+        .iter()
+        .any(|path| !path.is_file())
+    {
+        return Err(
+            "开发版未找到 GPT-SoVITS 环境；请设置 PHOEBE_GPTSOVITS_ROOT 与 PHOEBE_GPTSOVITS_ENV"
+                .into(),
+        );
+    }
+    Ok(layout)
 }
 
 fn reference_audio(_app: &AppHandle) -> Result<PathBuf, String> {
@@ -165,6 +487,162 @@ impl VoiceService {
         }
     }
 
+    fn stop_managed_server(&self) {
+        let server = self.server.lock().ok().and_then(|mut value| value.take());
+        if let Some(mut server) = server {
+            let _ = server.child.kill();
+            let _ = server.child.wait();
+        }
+    }
+
+    fn spawn_server(&self, app: &AppHandle, layout: &RuntimeLayout) -> Result<(), String> {
+        let data_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|_| "无法取得语音日志目录")?;
+        let cache_dir = app
+            .path()
+            .app_cache_dir()
+            .map_err(|_| "无法取得语音缓存目录")?
+            .join("gpt-sovits");
+        let log_dir = data_dir.join("logs");
+        let directories = [
+            cache_dir.clone(),
+            cache_dir.join("numba"),
+            cache_dir.join("matplotlib"),
+            cache_dir.join("huggingface"),
+            cache_dir.join("pycache"),
+            log_dir.clone(),
+        ];
+        for directory in directories {
+            fs::create_dir_all(directory).map_err(|_| "无法建立语音缓存或日志目录")?;
+        }
+        let log_path = log_dir.join("gpt-sovits.log");
+        let log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .map_err(|_| "无法打开 GPT-SoVITS 日志")?;
+        let error_log = log
+            .try_clone()
+            .map_err(|_| "无法准备 GPT-SoVITS 错误日志")?;
+
+        let mut command = Command::new(&layout.python);
+        command
+            .arg(&layout.api_script)
+            .args(["-a", "127.0.0.1", "-p", "9880", "-c"])
+            .arg(&layout.config)
+            .current_dir(&layout.project)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(error_log))
+            .env("PYTHONNOUSERSITE", "1")
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .env("PYTHONUNBUFFERED", "1")
+            .env("PYTHONPYCACHEPREFIX", cache_dir.join("pycache"))
+            .env("NUMBA_CACHE_DIR", cache_dir.join("numba"))
+            .env("MPLCONFIGDIR", cache_dir.join("matplotlib"))
+            .env("HF_HOME", cache_dir.join("huggingface"))
+            .env("XDG_CACHE_HOME", &cache_dir)
+            .env("TOKENIZERS_PARALLELISM", "false");
+        let old_path = env::var_os("PATH").unwrap_or_default();
+        let mut paths = if cfg!(windows) {
+            vec![
+                layout.root.join("python"),
+                layout.root.join("python/Scripts"),
+                layout.root.join("python/Library/bin"),
+            ]
+        } else {
+            vec![layout.root.join("python/bin")]
+        };
+        paths.extend(env::split_paths(&old_path));
+        if let Ok(path) = env::join_paths(paths) {
+            command.env("PATH", path);
+        }
+        #[cfg(target_os = "windows")]
+        command.creation_flags(0x08000000);
+
+        let child = command
+            .spawn()
+            .map_err(|_| "无法启动内置 GPT-SoVITS 推理服务")?;
+        let mut server = self.server.lock().map_err(|_| "语音服务进程状态不可用")?;
+        *server = Some(ManagedServer { child, log_path });
+        Ok(())
+    }
+
+    fn ensure_server(&self, app: &AppHandle) -> Result<bool, String> {
+        if health_ready(Duration::from_secs(2)) {
+            self.set_status("ready");
+            return Ok(false);
+        }
+        let _startup = self.startup.lock().map_err(|_| "语音服务启动锁不可用")?;
+        if health_ready(Duration::from_secs(1)) {
+            self.set_status("ready");
+            return Ok(false);
+        }
+        if let Ok(mut server) = self.server.lock() {
+            let exited = server
+                .as_mut()
+                .and_then(|value| value.child.try_wait().ok().flatten())
+                .is_some();
+            if exited {
+                *server = None;
+            }
+        }
+        self.set_status("starting");
+        let layout = prepare_bundled_runtime(app)?;
+        self.spawn_server(app, &layout)?;
+        let deadline = Instant::now() + SERVER_START_TIMEOUT;
+        while Instant::now() < deadline {
+            if health_ready(Duration::from_secs(1)) {
+                self.set_status("ready");
+                return Ok(true);
+            }
+            let exited = self.server.lock().ok().and_then(|mut server| {
+                server.as_mut().and_then(|value| {
+                    value
+                        .child
+                        .try_wait()
+                        .ok()
+                        .flatten()
+                        .map(|_| value.log_path.clone())
+                })
+            });
+            if let Some(log_path) = exited {
+                if let Ok(mut server) = self.server.lock() {
+                    *server = None;
+                }
+                self.set_status("failed");
+                return Err(format!(
+                    "内置 GPT-SoVITS 启动失败，请查看日志：{}",
+                    log_path.display()
+                ));
+            }
+            thread::sleep(Duration::from_millis(350));
+        }
+        self.stop_managed_server();
+        self.set_status("failed");
+        Err("内置 GPT-SoVITS 启动超时；文字回复仍可正常使用".into())
+    }
+
+    pub fn prewarm(app: &AppHandle) {
+        let handle = app.clone();
+        thread::spawn(move || {
+            let service = handle.state::<VoiceService>();
+            let status = if service.ensure_server(&handle).is_ok() {
+                "ready"
+            } else {
+                "failed"
+            };
+            let _ = handle.emit("voice-status", status);
+        });
+    }
+
+    pub fn shutdown(&self) {
+        self.stop_playback();
+        self.stop_managed_server();
+    }
+
     fn emit(
         app: &AppHandle,
         generation: u64,
@@ -223,20 +701,16 @@ impl VoiceService {
 
     pub fn check(&self, app: &AppHandle) -> VoiceDiagnostic {
         let reference_ok = reference_audio(app).is_ok();
-        let reachable = client(Duration::from_secs(4)).and_then(|client| {
-            client
-                .get(HEALTH_ENDPOINT)
-                .send()
-                .map_err(|_| "无法连接 127.0.0.1:9880；请先启动 api_v2.py".to_owned())?
-                .error_for_status()
-                .map_err(|_| "本机语音 API 返回错误".to_owned())?;
-            Ok(())
-        });
+        let reachable = self.ensure_server(app);
         let (status, message) = match (reachable, reference_ok) {
-            (Ok(()), true) => (
+            (Ok(started), true) => (
                 "ready",
-                "本机语音 API 与参考音频可用；请确认独立 API 已加载 GPT e15 和 SoVITS e8。"
-                    .to_owned(),
+                if started {
+                    "内置 GPT-SoVITS 已自动启动，GPT e15、SoVITS e8 与参考音频均可用。"
+                } else {
+                    "GPT-SoVITS 与参考音频可用；已复用正在运行的本机服务。"
+                }
+                .to_owned(),
             ),
             (Err(error), _) => ("failed", error),
             (_, false) => ("failed", "菲比参考音频缺失，请重新构建应用".to_owned()),
@@ -273,13 +747,13 @@ impl VoiceService {
         }
         self.stop_playback();
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        self.set_status("ready");
+        self.set_status("starting");
         Self::emit_with_cue(
             app,
             generation,
             Some(run_id.clone()),
             "synthesizing",
-            "正在用菲比声音合成回复…",
+            "正在准备菲比声音并合成回复…",
             Some(&emotion),
             Some(&gesture),
         );
@@ -398,11 +872,12 @@ impl VoiceService {
 
 impl Drop for VoiceService {
     fn drop(&mut self) {
-        self.stop_playback();
+        self.shutdown();
     }
 }
 
 fn synthesize_wav(app: &AppHandle, text: &str) -> Result<Vec<u8>, String> {
+    app.state::<VoiceService>().ensure_server(app)?;
     let reference = reference_audio(app)?;
     let request = TtsRequest {
         text,
@@ -425,7 +900,7 @@ fn synthesize_wav(app: &AppHandle, text: &str) -> Result<Vec<u8>, String> {
         .post(TTS_ENDPOINT)
         .json(&request)
         .send()
-        .map_err(|_| "无法连接本机 GPT-SoVITS；请确认 9880 API 与模型已加载".to_owned())?;
+        .map_err(|_| "无法连接自动管理的 GPT-SoVITS；文字回复仍已保留".to_owned())?;
     if !response.status().is_success() {
         return Err("GPT-SoVITS 合成失败；请检查 API 终端中的模型与参考音频错误".into());
     }
@@ -439,7 +914,10 @@ fn synthesize_wav(app: &AppHandle, text: &str) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_wav, GPT_WEIGHT, REFERENCE_TEXT, SOVITS_WEIGHT};
+    use super::{
+        valid_runtime_component, validate_manifest, validate_wav, ArchiveResource,
+        VoiceRuntimeManifest, GPT_WEIGHT, REFERENCE_TEXT, SOVITS_WEIGHT, VOICE_RUNTIME_FORMAT,
+    };
 
     #[test]
     fn baseline_voice_configuration_is_fixed() {
@@ -458,5 +936,36 @@ mod tests {
         wav[0..4].copy_from_slice(b"RIFF");
         wav[8..12].copy_from_slice(b"WAVE");
         assert!(validate_wav(&wav).is_ok());
+    }
+
+    #[test]
+    fn rejects_unsafe_or_foreign_voice_runtime_manifests() {
+        let manifest = VoiceRuntimeManifest {
+            format: VOICE_RUNTIME_FORMAT,
+            runtime_id: "v1-test".into(),
+            platform: std::env::consts::OS.into(),
+            architecture: std::env::consts::ARCH.into(),
+            python_archive: ArchiveResource {
+                file: "python-env.tar.gz".into(),
+                sha256: "a".repeat(64),
+            },
+            project_archive: ArchiveResource {
+                file: "gpt-sovits.tar.gz".into(),
+                sha256: "b".repeat(64),
+            },
+            api_script: "gpt-sovits/api_v2.py".into(),
+            config: "gpt-sovits/phoebe_tts.yaml".into(),
+            gpt_weight: GPT_WEIGHT.into(),
+            sovits_weight: SOVITS_WEIGHT.into(),
+        };
+        assert!(validate_manifest(&manifest).is_ok());
+        assert!(!valid_runtime_component("../escape"));
+        assert!(!valid_runtime_component("/absolute"));
+
+        let foreign = VoiceRuntimeManifest {
+            platform: "foreign-os".into(),
+            ..manifest
+        };
+        assert!(validate_manifest(&foreign).is_err());
     }
 }

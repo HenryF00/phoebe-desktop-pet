@@ -210,6 +210,8 @@ fn update_quick_preferences(
         .update_quick_preferences(&app, interaction_mode, voice_enabled)?;
     if !voice_enabled {
         app.state::<VoiceService>().stop(&app);
+    } else {
+        VoiceService::prewarm(&app);
     }
     let preferences = QuickPreferences::from(settings);
     app.emit("quick-preferences-changed", preferences.clone())
@@ -355,6 +357,8 @@ fn update_settings(
     )?;
     if !settings.voice_enabled {
         app.state::<VoiceService>().stop(&app);
+    } else {
+        VoiceService::prewarm(&app);
     }
     app.emit(
         "quick-preferences-changed",
@@ -639,7 +643,16 @@ pub fn run() {
             };
             let _ = window_manager::apply_pet_scale(app.handle(), pet_scale_percent);
             let _ = app.state::<HistoryStore>().open(app.handle());
-            window_manager::setup_tray(app).map_err(Into::into)
+            window_manager::setup_tray(app)?;
+            if app
+                .state::<settings::SettingsStore>()
+                .get()
+                .map(|settings| settings.voice_enabled)
+                .unwrap_or(false)
+            {
+                VoiceService::prewarm(app.handle());
+            }
+            Ok(())
         })
         .on_window_event(window_manager::on_window_event)
         .invoke_handler(tauri::generate_handler![
@@ -683,8 +696,11 @@ pub fn run() {
         .expect("failed to build Phoebe desktop app")
         .run(|app, event| {
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { .. } = event {
+            if let tauri::RunEvent::Reopen { .. } = &event {
                 let _ = window_manager::show_pet(app);
+            }
+            if let tauri::RunEvent::Exit = &event {
+                app.state::<VoiceService>().shutdown();
             }
         });
 }

@@ -7,7 +7,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build --config src-tauri/tauri.release.conf.json",
+    "tauri:build": "node scripts/package-release.mjs",
     "release:prepare": "node scripts/prepare-release.mjs"
   },
   "dependencies": {

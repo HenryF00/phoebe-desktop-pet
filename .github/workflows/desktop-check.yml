@@ -34,4 +34,6 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: cargo test --workspace
-      - run: npm run tauri:build -w @phoebe/desktop
+      # Installer packaging needs the platform-local private voice weights and
+      # a prepared GPT-SoVITS Conda environment, so public CI validates code only.
+      - run: cargo build --release --workspace
