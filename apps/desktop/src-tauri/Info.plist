@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>NSLocationUsageDescription</key>
+    <string>菲比助手仅在你点击“定位一次”后获取城市级位置，用于本轮对话；不会持续跟踪。</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>菲比助手仅在你点击“定位一次”后获取城市级位置，用于本轮对话；不会持续跟踪。</string>
+  </dict>
+</plist>

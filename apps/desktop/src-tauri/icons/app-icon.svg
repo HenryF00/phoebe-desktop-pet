@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="菲比助手开发图标">
+  <defs>
+    <linearGradient id="surface" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#9176c5"/>
+      <stop offset="1" stop-color="#50366f"/>
+    </linearGradient>
+  </defs>
+  <rect x="24" y="24" width="464" height="464" rx="120" fill="url(#surface)"/>
+  <circle cx="256" cy="252" r="146" fill="none" stroke="#c7b6e8" stroke-width="8" opacity=".75"/>
+  <path d="M192 368V151h73c56 0 91 30 91 78s-35 78-91 78h-24v61h-49zm49-108h23c31 0 45-12 45-31s-14-31-45-31h-23v62z" fill="#fff"/>
+  <path d="M379 113l9 27 27 9-27 9-9 27-9-27-27-9 27-9z" fill="#e9deff"/>
+</svg>

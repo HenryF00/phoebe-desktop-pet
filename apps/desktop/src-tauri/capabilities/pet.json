@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "pet",
+  "description": "The pet window can use only the core event and window APIs needed for its UI.",
+  "windows": ["pet"],
+  "permissions": ["core:default"]
+}

@@ -1,0 +1,33 @@
+Generator: Codex built-in imagegen (identity-preserve and precise-object-edit workflows)
+Generated for: private local Tauri desktop-pet prototype
+Canonical identity reference: phoebe-full-prototype.png
+Runtime canvas: 1004 x 1567 RGBA, transparent, bottom aligned
+
+Final prompt set
+
+1. Chat idle
+Create one alternate transparent full-body chat-mode idle pose for the same character. Make her warm, attentive and conversational, facing the viewer more directly with a gentle smile and both black-gloved hands naturally gathered in front. Preserve identity, face, hair, hat, blue-white-gold costume, proportions and rendering. Exactly one character, two arms and two hands; no duplicate limbs, text, background, shadow, particles or detached effects. Match the canonical scale and foot baseline.
+
+2. Chat blink
+Using the approved chat idle as the edit target, change only both eyes to a natural closed-eye blink. Preserve the face, smile, pose, hands, costume, scale, baseline and alpha transparency.
+
+3. Chat thinking
+Create a transparent full-body thinking/listening pose for the same character. Use a soft attentive upward gaze, one black-gloved finger near the chin and the other hand relaxed at the waist. Preserve identity, scale, baseline and rendering. Do not add question marks, symbols, text or effects.
+
+4. Chat present
+Create a transparent full-body explaining pose for the same character. One black-gloved hand makes a small open-palm presenting gesture beside the torso and the other rests near the waist. Keep a warm confident smile and direct eye contact. The gesture must read at small pet size and must not look like a wave.
+
+5. Staff rule for idle, blink, thinking and present
+Remove the entire staff, scepter or weapon whenever neither hand holds it. Remove all shafts, handles, blades, ornaments and fragments, reconstructing transparent gaps and crossed hair/cape edges. Do not leave floating or partial weapon pieces and do not change the pose.
+
+6. Waving repair
+Keep the raised hand waving freely. Make the lower hand clearly grip exactly one complete staff, using the canonical reference for its design. The ornate head, shaft and segment entering the lower gripping hand must be visibly continuous. Do not place a second weapon behind the waving hand; do not add duplicate hands, fingers, staff pieces, wave marks or motion lines.
+
+Final runtime assets
+- phoebe-assistant-idle-v1.png
+- phoebe-assistant-blink-v1.png
+- phoebe-assistant-wave-v1.png
+- phoebe-chat-idle-v1.png
+- phoebe-chat-blink-v1.png
+- phoebe-chat-thinking-v1.png
+- phoebe-chat-present-v1.png

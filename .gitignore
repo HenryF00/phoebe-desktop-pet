@@ -12,4 +12,11 @@ vendor/
 runtime/
 generated/
 *.log
-
+node_modules/
+target/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/binaries/
+apps/desktop/src-tauri/resources/
+apps/desktop/public/pet/*-prototype.png
+phoebe_voice_zh/wav/*.wav
+!phoebe_voice_zh/wav/021_自我介绍.wav

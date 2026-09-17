@@ -1,0 +1,12 @@
+{
+  "name": "phoebe-assistant-workspace",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "desktop:dev": "npm run tauri:dev -w @phoebe/desktop",
+    "desktop:web": "npm run dev -w @phoebe/desktop",
+    "build": "npm run build -w @phoebe/shared && npm run build -w @phoebe/desktop",
+    "test": "npm run test -w @phoebe/shared && npm run test -w @phoebe/agent",
+    "agent:dev": "npm run dev -w @phoebe/agent"
+  }
+}

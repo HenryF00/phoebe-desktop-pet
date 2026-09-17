@@ -1,0 +1,8 @@
+Asset: phoebe-chat-mode-official.jpg
+Purpose: private local prototype artwork for the desktop pet's chat mode
+Official character page: https://wutheringwaves.kurogames.com/jp/main/news/detail/2105
+Official CDN asset: https://hw-media-cdn-mingchao.kurogame.com/akiwebsite/website2.0/images/1739116800000/lcya79urgh61nr35xz-1739155403893.jpg
+Downloaded: 2026-09-16
+Resolution: 1080 x 1920
+SHA-256: 29ccf3c029f93aa9cab87511228af3afb9459ad2609b1afc5816b3d7d4cf2188
+Rights note: Copyright remains with Kuro Games. Kept for the user's private local prototype; do not redistribute with a public release without permission.

@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "canvas": { "width": 1004, "height": 1567 },
+  "clips": {
+    "assistant-idle": { "loop": true, "motion": "breathe", "frames": [
+      { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 3600 },
+      { "src": "/pet/phoebe-assistant-blink-v1.png", "durationMs": 135 },
+      { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 175 },
+      { "src": "/pet/phoebe-assistant-blink-v1.png", "durationMs": 105 },
+      { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 2450 }
+    ] },
+    "assistant-blink": { "loop": false, "motion": "still", "holdLastMs": 500, "frames": [
+      { "src": "/pet/phoebe-assistant-blink-v1.png", "durationMs": 500 }
+    ] },
+    "assistant-thinking": { "loop": true, "motion": "thinking", "frames": [
+      { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 1400 },
+      { "src": "/pet/phoebe-assistant-blink-v1.png", "durationMs": 135 },
+      { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 1100 }
+    ] },
+    "assistant-tool": { "loop": true, "motion": "tool", "frames": [
+      { "src": "/pet/phoebe-assistant-tool-v2.png", "durationMs": 2200 }
+    ] },
+    "assistant-listening": { "loop": true, "motion": "listening", "frames": [
+      { "src": "/pet/phoebe-chat-idle-v1.png", "durationMs": 2400 },
+      { "src": "/pet/phoebe-chat-blink-v2.png", "durationMs": 135 },
+      { "src": "/pet/phoebe-chat-idle-v1.png", "durationMs": 1800 }
+    ] },
+    "assistant-speaking": { "loop": true, "motion": "speaking", "frames": [
+      { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 1250 },
+      { "src": "/pet/phoebe-assistant-blink-v1.png", "durationMs": 120 },
+      { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 850 }
+    ] },
+    "assistant-nod": { "loop": false, "motion": "nod-once", "holdLastMs": 280, "frames": [
+      { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 720 }
+    ] },
+    "assistant-present": { "loop": true, "motion": "present", "frames": [
+      { "src": "/pet/phoebe-assistant-tool-v2.png", "durationMs": 2200 }
+    ] },
+    "assistant-happy": { "loop": false, "motion": "wave-once", "holdLastMs": 360, "frames": [
+      { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 180 },
+      { "src": "/pet/phoebe-assistant-wave-prep-v2.png", "durationMs": 220 },
+      { "src": "/pet/phoebe-assistant-wave-v1.png", "durationMs": 280 },
+      { "src": "/pet/phoebe-assistant-wave-prep-v2.png", "durationMs": 210 },
+      { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 260 }
+    ] },
+    "assistant-shy": { "loop": true, "motion": "shy", "frames": [
+      { "src": "/pet/phoebe-chat-shy-v2.png", "durationMs": 2500 }
+    ] },
+    "assistant-concerned": { "loop": true, "motion": "concerned", "frames": [
+      { "src": "/pet/phoebe-chat-concerned-v2.png", "durationMs": 2600 }
+    ] },
+    "assistant-wave": { "loop": false, "motion": "wave-once", "holdLastMs": 280, "frames": [
+      { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 180 },
+      { "src": "/pet/phoebe-assistant-wave-prep-v2.png", "durationMs": 230 },
+      { "src": "/pet/phoebe-assistant-wave-v1.png", "durationMs": 280 },
+      { "src": "/pet/phoebe-assistant-wave-prep-v2.png", "durationMs": 220 },
+      { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 260 }
+    ] },
+    "assistant-cancel": { "loop": false, "motion": "settle", "holdLastMs": 180, "frames": [
+      { "src": "/pet/phoebe-assistant-wave-prep-v2.png", "durationMs": 170 },
+      { "src": "/pet/phoebe-assistant-idle-v1.png", "durationMs": 300 }
+    ] },
+
+    "chat-idle": { "loop": true, "motion": "breathe", "frames": [
+      { "src": "/pet/phoebe-chat-idle-v1.png", "durationMs": 3400 },
+      { "src": "/pet/phoebe-chat-blink-v2.png", "durationMs": 130 },
+      { "src": "/pet/phoebe-chat-idle-v1.png", "durationMs": 175 },
+      { "src": "/pet/phoebe-chat-blink-v2.png", "durationMs": 105 },
+      { "src": "/pet/phoebe-chat-idle-v1.png", "durationMs": 2200 }
+    ] },
+    "chat-blink": { "loop": false, "motion": "still", "holdLastMs": 500, "frames": [
+      { "src": "/pet/phoebe-chat-blink-v2.png", "durationMs": 500 }
+    ] },
+    "chat-thinking": { "loop": true, "motion": "thinking", "frames": [
+      { "src": "/pet/phoebe-chat-thinking-v1.png", "durationMs": 1750 },
+      { "src": "/pet/phoebe-chat-idle-v1.png", "durationMs": 380 }
+    ] },
+    "chat-tool": { "loop": true, "motion": "thinking", "frames": [
+      { "src": "/pet/phoebe-chat-thinking-v1.png", "durationMs": 2300 }
+    ] },
+    "chat-listening": { "loop": true, "motion": "listening", "frames": [
+      { "src": "/pet/phoebe-chat-idle-v1.png", "durationMs": 2500 },
+      { "src": "/pet/phoebe-chat-blink-v2.png", "durationMs": 125 },
+      { "src": "/pet/phoebe-chat-idle-v1.png", "durationMs": 1750 }
+    ] },
+    "chat-speaking": { "loop": true, "motion": "speaking", "frames": [
+      { "src": "/pet/phoebe-chat-idle-v1.png", "durationMs": 1050 },
+      { "src": "/pet/phoebe-chat-blink-v2.png", "durationMs": 115 },
+      { "src": "/pet/phoebe-chat-idle-v1.png", "durationMs": 720 }
+    ] },
+    "chat-nod": { "loop": false, "motion": "nod-once", "holdLastMs": 280, "frames": [
+      { "src": "/pet/phoebe-chat-idle-v1.png", "durationMs": 720 }
+    ] },
+    "chat-present": { "loop": true, "motion": "present", "frames": [
+      { "src": "/pet/phoebe-chat-present-v1.png", "durationMs": 2300 }
+    ] },
+    "chat-happy": { "loop": false, "motion": "wave-once", "holdLastMs": 360, "frames": [
+      { "src": "/pet/phoebe-chat-idle-v1.png", "durationMs": 180 },
+      { "src": "/pet/phoebe-chat-wave-prep-v2.png", "durationMs": 220 },
+      { "src": "/pet/phoebe-chat-wave-v2.png", "durationMs": 280 },
+      { "src": "/pet/phoebe-chat-wave-prep-v2.png", "durationMs": 210 },
+      { "src": "/pet/phoebe-chat-idle-v1.png", "durationMs": 260 }
+    ] },
+    "chat-shy": { "loop": true, "motion": "shy", "frames": [
+      { "src": "/pet/phoebe-chat-shy-v2.png", "durationMs": 2500 }
+    ] },
+    "chat-concerned": { "loop": true, "motion": "concerned", "frames": [
+      { "src": "/pet/phoebe-chat-concerned-v2.png", "durationMs": 2600 }
+    ] },
+    "chat-wave": { "loop": false, "motion": "wave-once", "holdLastMs": 280, "frames": [
+      { "src": "/pet/phoebe-chat-idle-v1.png", "durationMs": 180 },
+      { "src": "/pet/phoebe-chat-wave-prep-v2.png", "durationMs": 230 },
+      { "src": "/pet/phoebe-chat-wave-v2.png", "durationMs": 280 },
+      { "src": "/pet/phoebe-chat-wave-prep-v2.png", "durationMs": 220 },
+      { "src": "/pet/phoebe-chat-idle-v1.png", "durationMs": 260 }
+    ] },
+    "chat-cancel": { "loop": false, "motion": "settle", "holdLastMs": 180, "frames": [
+      { "src": "/pet/phoebe-chat-wave-prep-v2.png", "durationMs": 170 },
+      { "src": "/pet/phoebe-chat-idle-v1.png", "durationMs": 300 }
+    ] }
+  }
+}

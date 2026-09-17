@@ -1,0 +1,7 @@
+Asset: phoebe-chat-background.jpg
+Character: Phoebe / 菲比, Wuthering Waves / 鸣潮
+Publisher: KURO GAMES
+Source page: https://www.qieyou.com/content/117003
+Original CDN: https://prod-alicdn-community.kurobbs.com/forum/5248853175af49ae8702fe0f21e4053520250212.jpg
+Retrieved: 2026-09-16
+Project use: Local private-use chat background. The bundled copy is resized and compressed; composition is preserved.

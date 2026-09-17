@@ -1,0 +1,65 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Phoebe Assistant",
+  "version": "0.1.0",
+  "identifier": "local.phoebe.assistant",
+  "build": {
+    "beforeDevCommand": "npm run dev -w @phoebe/desktop",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [{
+      "label": "pet",
+      "title": "菲比助手",
+      "width": 240,
+      "height": 328,
+      "decorations": false,
+      "transparent": true,
+      "shadow": false,
+      "alwaysOnTop": true,
+      "skipTaskbar": true,
+      "resizable": false
+    }, {
+      "label": "chat",
+      "title": "菲比助手 · 聊天",
+      "width": 432,
+      "height": 600,
+      "decorations": false,
+      "transparent": true,
+      "shadow": false,
+      "alwaysOnTop": true,
+      "skipTaskbar": true,
+      "resizable": false,
+      "visible": false,
+      "focus": true
+    }, {
+      "label": "menu",
+      "title": "菲比助手 · 快捷菜单",
+      "width": 220,
+      "height": 660,
+      "decorations": false,
+      "transparent": true,
+      "shadow": false,
+      "alwaysOnTop": true,
+      "skipTaskbar": true,
+      "resizable": false,
+      "visible": false,
+      "focus": true
+    }, {
+      "label": "settings",
+      "title": "菲比助手 · 设置",
+      "width": 560,
+      "height": 620,
+      "minWidth": 420,
+      "minHeight": 480,
+      "visible": false,
+      "resizable": true,
+      "focus": true
+    }],
+    "security": { "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'" }
+  },
+  "bundle": { "active": false }
+}

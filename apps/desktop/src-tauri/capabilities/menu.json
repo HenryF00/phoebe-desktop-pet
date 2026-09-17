@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "menu",
+  "description": "The quick menu window uses only core events for its own actions.",
+  "windows": ["menu"],
+  "permissions": ["core:default"]
+}
