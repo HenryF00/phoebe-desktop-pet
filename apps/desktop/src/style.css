@@ -473,3 +473,16 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .audit-badge.is-success { background: #193629; color: #97d3b4; }
   .audit-actions button.is-danger { background: #351e29; color: #f0b9c8; }
 }
+
+/* Granted folders and approval preview */
+.approval-preview { max-height: 180px; overflow: auto; margin: 12px 0 0; padding: 10px 12px; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface-soft); color: var(--ui-text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.grant-list { display: grid; gap: 6px; margin-top: 4px; }
+.grant-row { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface-soft); font-size: 12px; }
+.grant-label { font-weight: 650; color: var(--ui-text); }
+.grant-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ui-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.grant-perm { color: var(--ui-muted); font-size: 11px; }
+.grant-row button { min-height: 30px; padding: 0 10px; border: 1px solid color-mix(in srgb, var(--ui-danger) 42%, var(--ui-border)); border-radius: 8px; background: #fdeef2; color: var(--ui-danger); font-size: 11px; font-weight: 650; }
+@media (prefers-color-scheme: dark) {
+  .approval-preview, .grant-row { background: #1e2c47; border-color: #34435f; }
+  .grant-row button { background: #351e29; color: #f0b9c8; }
+}

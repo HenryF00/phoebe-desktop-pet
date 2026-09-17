@@ -3,16 +3,18 @@
 //!
 //! The Node sidecar never executes an OS action itself. It emits a
 //! `tool_request`, the gateway validates the caller's per-run allow-list, the
-//! argument schema and the current policy, optionally asks the user, executes
-//! the action and writes a `tool_result` back. Approval is always shown by Rust
-//! (React modal first, native dialog as fallback), so a compromised or
-//! prompt-injected sidecar cannot approve its own request.
+//! argument schema, the folder grant and the current policy, optionally asks
+//! the user, executes the action and writes a `tool_result` back. Approval is
+//! always shown by Rust (React modal first, native dialog as fallback), so a
+//! compromised or prompt-injected sidecar cannot approve its own request.
 
 mod audit;
 mod grants;
+mod paths;
 mod registry;
 
 pub use audit::AuditEntry;
+pub use grants::{FolderGrant, GrantSummary};
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -24,7 +26,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use crate::settings::{ActionMode, InteractionMode};
-use registry::{Parsed, Tool as ToolSpec};
+use registry::{Describe, Parsed, Tool as ToolSpec};
 
 /// How long a user has to answer an approval before it is denied.
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -32,10 +34,7 @@ const APPROVAL_TIMEOUT: Duration = Duration::from_secs(60);
 /// Tools registered for one conversation turn. Rust is authoritative: the
 /// Node sidecar receives exactly this list and the gateway independently
 /// rejects anything outside it.
-pub fn allowed_tools_for(
-    interaction_mode: InteractionMode,
-    action_mode: ActionMode,
-) -> Vec<String> {
+pub fn allowed_tools_for(interaction_mode: InteractionMode, action_mode: ActionMode) -> Vec<String> {
     let mut tools: Vec<String> = [
         "web_search",
         "read_selected_file",
@@ -47,9 +46,31 @@ pub fn allowed_tools_for(
     .map(|name| (*name).to_owned())
     .collect();
     if interaction_mode == InteractionMode::Assistant && action_mode != ActionMode::Disabled {
-        tools.push("open_url".to_owned());
+        tools.extend(
+            [
+                "open_url",
+                "list_granted_folders",
+                "list_directory",
+                "read_text_file",
+                "search_files",
+                "write_file",
+                "move_file",
+                "delete_file",
+            ]
+            .iter()
+            .map(|name| (*name).to_owned()),
+        );
     }
     tools
+}
+
+/// Everything a tool executor needs besides its parsed arguments.
+pub struct ToolContext<'a> {
+    pub app: &'a AppHandle,
+    /// Resolved grant for this call, if the tool operates on a granted folder.
+    pub folder: Option<FolderGrant>,
+    /// Grant summaries safe to expose to the model.
+    pub grants: Vec<GrantSummary>,
 }
 
 #[derive(Clone, Serialize)]
@@ -62,6 +83,8 @@ pub struct ApprovalView {
     pub impact: String,
     pub scope: &'static str,
     pub rememberable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
 }
 
 pub struct ToolOutcome {
@@ -176,7 +199,40 @@ impl ToolBroker {
                 return ToolOutcome::denied(message).into_line(request_id);
             }
         };
-        let (target, impact) = spec.describe(&parsed);
+
+        // A folder grant is a prerequisite: the model may only reference folders
+        // the user explicitly granted, and write tools additionally need the
+        // write permission.
+        let mut folder = None;
+        if let Some(requirement) = spec.required_grant(&parsed) {
+            let grant = self
+                .inner
+                .grants
+                .lock()
+                .ok()
+                .and_then(|grants| grants.folder(&requirement.grant_id).cloned());
+            match grant {
+                Some(grant) if !requirement.write || grant.write => folder = Some(grant),
+                _ => {
+                    self.record_audit(run_id, tool_name, "", "deny", "denied", "目录未授权或权限不足");
+                    return ToolOutcome::denied("该目录未授权或没有对应权限").into_line(request_id);
+                }
+            }
+        }
+
+        let ctx = ToolContext {
+            app,
+            folder,
+            grants: self.grant_summaries(),
+        };
+        let describe = match spec.describe(&ctx, &parsed) {
+            Ok(describe) => describe,
+            Err(message) => {
+                self.record_audit(run_id, tool_name, "", "deny", "denied", &message);
+                return ToolOutcome::denied(message).into_line(request_id);
+            }
+        };
+        let target = describe.target.clone();
 
         let mut decision_label = "auto".to_owned();
         if !spec.is_auto() {
@@ -187,7 +243,7 @@ impl ToolBroker {
                 }
                 Decision::Allow => decision_label = "allow_trusted".to_owned(),
                 Decision::Ask { rememberable } => {
-                    match self.ask(app, run_id, &spec, &target, &impact, rememberable) {
+                    match self.ask(app, run_id, &spec, &describe, rememberable) {
                         Resolution::Deny => {
                             self.record_audit(run_id, tool_name, &target, "deny", "denied", "用户拒绝");
                             return ToolOutcome::denied("用户拒绝了该操作").into_line(request_id);
@@ -204,9 +260,7 @@ impl ToolBroker {
             }
         }
 
-        let outcome = spec
-            .execute(&parsed)
-            .unwrap_or_else(ToolOutcome::failed);
+        let outcome = spec.execute(&ctx, &parsed).unwrap_or_else(ToolOutcome::failed);
         let outcome_label = if outcome.is_error { "failed" } else { "success" };
         self.record_audit(run_id, tool_name, &target, &decision_label, outcome_label, &outcome.text);
         outcome.into_line(request_id)
@@ -273,6 +327,52 @@ impl ToolBroker {
             .unwrap_or_default()
     }
 
+    pub fn grant_summaries(&self) -> Vec<GrantSummary> {
+        self.inner
+            .grants
+            .lock()
+            .map(|grants| grants.summaries())
+            .unwrap_or_default()
+    }
+
+    pub fn grant_views(&self) -> Vec<FolderGrant> {
+        self.inner
+            .grants
+            .lock()
+            .map(|grants| grants.folder_views())
+            .unwrap_or_default()
+    }
+
+    /// Registers a user-selected folder. The path comes from the native picker,
+    /// never from the Agent.
+    pub fn add_folder(
+        &self,
+        app: &AppHandle,
+        path: &std::path::Path,
+        read: bool,
+        write: bool,
+    ) -> Result<FolderGrant, String> {
+        let canonical = std::fs::canonicalize(path).map_err(|_| "无法访问所选文件夹".to_owned())?;
+        let label = canonical
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.to_owned())
+            .unwrap_or_else(|| canonical.display().to_string());
+        let path_string = canonical.display().to_string();
+        let mut grants = self.inner.grants.lock().map_err(|_| "授权状态不可用")?;
+        let id = grants.add_folder(&path_string, &label, read, write)?;
+        grants.save(app)?;
+        grants.folder(&id).cloned().ok_or_else(|| "授权创建失败".to_owned())
+    }
+
+    pub fn revoke_folder(&self, app: &AppHandle, id: &str) -> Result<(), String> {
+        let mut grants = self.inner.grants.lock().map_err(|_| "授权状态不可用")?;
+        if !grants.remove_folder(id) {
+            return Err("该授权不存在".to_owned());
+        }
+        grants.save(app)
+    }
+
     fn decide(&self, app: &AppHandle, spec: &ToolSpec, parsed: &Parsed) -> Decision {
         let mode = app
             .state::<crate::settings::SettingsStore>()
@@ -282,22 +382,28 @@ impl ToolBroker {
         match mode {
             ActionMode::Disabled => Decision::Deny,
             ActionMode::Standard => Decision::Ask { rememberable: false },
-            ActionMode::Trust => match spec.bound_key(parsed) {
-                Some(key) => {
-                    let granted = self
-                        .inner
-                        .grants
-                        .lock()
-                        .map(|grants| grants.contains(&key))
-                        .unwrap_or(false);
-                    if granted {
-                        Decision::Allow
-                    } else {
-                        Decision::Ask { rememberable: true }
+            ActionMode::Trust => {
+                if spec.always_confirms() {
+                    Decision::Ask { rememberable: false }
+                } else {
+                    match spec.bound_key(parsed) {
+                        Some(key) => {
+                            let granted = self
+                                .inner
+                                .grants
+                                .lock()
+                                .map(|grants| grants.contains(&key))
+                                .unwrap_or(false);
+                            if granted {
+                                Decision::Allow
+                            } else {
+                                Decision::Ask { rememberable: true }
+                            }
+                        }
+                        None => Decision::Ask { rememberable: false },
                     }
                 }
-                None => Decision::Ask { rememberable: false },
-            },
+            }
         }
     }
 
@@ -306,8 +412,7 @@ impl ToolBroker {
         app: &AppHandle,
         run_id: &str,
         spec: &ToolSpec,
-        target: &str,
-        impact: &str,
+        describe: &Describe,
         rememberable: bool,
     ) -> Resolution {
         let id = self.new_approval_id();
@@ -316,10 +421,11 @@ impl ToolBroker {
             id: id.clone(),
             run_id: run_id.to_owned(),
             tool: spec.name().to_owned(),
-            target: target.to_owned(),
-            impact: impact.to_owned(),
+            target: describe.target.clone(),
+            impact: describe.impact.clone(),
             scope: if rememberable { "bound_target" } else { "once" },
             rememberable,
+            preview: describe.preview.clone(),
         };
         {
             let Ok(mut approvals) = self.inner.approvals.lock() else {
@@ -434,10 +540,13 @@ mod tests {
     fn chat_mode_hides_operation_tools() {
         let chat = allowed_tools_for(InteractionMode::Chat, ActionMode::Standard);
         assert!(!chat.iter().any(|name| name == "open_url"));
+        assert!(!chat.iter().any(|name| name == "read_text_file"));
         let disabled = allowed_tools_for(InteractionMode::Assistant, ActionMode::Disabled);
-        assert!(!disabled.iter().any(|name| name == "open_url"));
+        assert!(!disabled.iter().any(|name| name == "read_text_file"));
         let assistant = allowed_tools_for(InteractionMode::Assistant, ActionMode::Standard);
-        assert!(assistant.iter().any(|name| name == "open_url"));
+        for expected in ["open_url", "list_granted_folders", "list_directory", "read_text_file", "search_files"] {
+            assert!(assistant.iter().any(|name| name == expected), "missing {expected}");
+        }
     }
 
     #[test]
@@ -446,5 +555,6 @@ mod tests {
         assert!(broker.pending_view().is_none());
         assert!(broker.resolve("missing", "allow_once").is_err());
         assert!(broker.resolve("missing", "bogus").is_err());
+        assert!(broker.grant_summaries().is_empty());
     }
 }

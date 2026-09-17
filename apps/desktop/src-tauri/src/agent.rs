@@ -327,6 +327,7 @@ impl AgentSupervisor {
         let interaction_mode = settings.interaction_mode;
         let action_mode = settings.action_mode;
         let allowed_tools = crate::tools::allowed_tools_for(interaction_mode, action_mode);
+        let folder_grants = app.state::<crate::tools::ToolBroker>().grant_summaries();
         let model = settings.model;
         let search_proxy = settings.search_proxy;
         let memories = app
@@ -378,7 +379,7 @@ impl AgentSupervisor {
             serde_json::json!({
                 "type": "prompt", "runId": run_id, "text": text, "memories": memories,
                 "file": file, "location": location, "interactionMode": interaction_mode,
-                "tools": allowed_tools
+                "tools": allowed_tools, "folderGrants": folder_grants
             }),
         );
         if result.is_err() {

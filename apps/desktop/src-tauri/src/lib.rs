@@ -544,6 +544,58 @@ async fn select_agent_file(
 }
 
 #[tauri::command]
+async fn select_folder_grant(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    writable: bool,
+) -> Result<Option<tools::FolderGrant>, String> {
+    require_caller(&window, "chat")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = app
+            .dialog()
+            .file()
+            .set_title(if writable {
+                "选择要授权给菲比读写的文件夹"
+            } else {
+                "选择要授权给菲比读取的文件夹"
+            })
+            .set_parent(&window)
+            .blocking_pick_folder();
+        let Some(path) = path else {
+            return Ok(None);
+        };
+        let path = path.into_path().map_err(|_| "所选路径不是本机文件夹")?;
+        app.state::<tools::ToolBroker>()
+            .add_folder(&app, &path, true, writable)
+            .map(Some)
+    })
+    .await
+    .map_err(|_| "文件夹选择线程不可用".to_owned())?
+}
+
+#[tauri::command]
+fn list_folder_grants(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<Vec<tools::FolderGrant>, String> {
+    require_any_caller(&window, &["chat", "settings"])?;
+    Ok(app.state::<tools::ToolBroker>().grant_views())
+}
+
+#[tauri::command]
+fn revoke_folder_grant(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    grant_id: String,
+) -> Result<(), String> {
+    require_caller(&window, "settings")?;
+    if grant_id.len() != 32 || !grant_id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("目录授权标识无效".into());
+    }
+    app.state::<tools::ToolBroker>().revoke_folder(&app, &grant_id)
+}
+
+#[tauri::command]
 fn attach_device_location(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
@@ -674,6 +726,9 @@ pub fn run() {
             panic_stop_operations,
             prompt_agent,
             select_agent_file,
+            select_folder_grant,
+            list_folder_grants,
+            revoke_folder_grant,
             attach_device_location,
             clear_agent_attachments,
             cancel_agent,

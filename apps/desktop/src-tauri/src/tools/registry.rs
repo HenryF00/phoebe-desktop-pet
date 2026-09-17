@@ -2,12 +2,17 @@
 //!
 //! Every tool parses its own arguments with `deny_unknown_fields`, so a model
 //! cannot smuggle extra parameters past the gateway. Execution is deliberately
-//! performed here in Rust, never inside the Node sidecar.
+//! performed here in Rust, never inside the Node sidecar. File tools only ever
+//! accept a grant id plus a relative path; absolute paths never reach the model.
+
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use tauri::Manager;
 use url::Url;
 
-use super::ToolOutcome;
+use super::paths::{resolve_read_path, resolve_write_path, PathPolicy};
+use super::{ToolContext, ToolOutcome};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -19,10 +24,89 @@ struct OpenUrlArgs {
     url: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ListDirectoryArgs {
+    grant_id: String,
+    #[serde(default)]
+    relative_path: String,
+    #[serde(default)]
+    max_entries: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReadTextFileArgs {
+    grant_id: String,
+    #[serde(default)]
+    relative_path: String,
+    #[serde(default)]
+    max_bytes: Option<u64>,
+    #[serde(default)]
+    offset: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SearchFilesArgs {
+    grant_id: String,
+    #[serde(default)]
+    relative_path: String,
+    query: String,
+    #[serde(default)]
+    max_results: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WriteFileArgs {
+    grant_id: String,
+    relative_path: String,
+    content: String,
+    #[serde(default)]
+    create_only: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MoveFileArgs {
+    grant_id: String,
+    from_relative_path: String,
+    to_relative_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeleteFileArgs {
+    grant_id: String,
+    relative_path: String,
+}
+
 #[derive(Debug)]
 pub enum Parsed {
     Empty,
     OpenUrl { url: String, host: String },
+    ListGrantedFolders,
+    ListDirectory { grant_id: String, relative_path: String, max_entries: u32 },
+    ReadTextFile { grant_id: String, relative_path: String, max_bytes: u64, offset: u64 },
+    SearchFiles { grant_id: String, relative_path: String, query: String, max_results: u32 },
+    WriteFile { grant_id: String, relative_path: String, content: String, create_only: bool },
+    MoveFile { grant_id: String, from_path: String, to_path: String },
+    DeleteFile { grant_id: String, relative_path: String },
+}
+
+/// Description shown to the human in the approval dialog. Never sent to the model.
+#[derive(Debug)]
+pub struct Describe {
+    pub target: String,
+    pub impact: String,
+    pub preview: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct GrantRequirement {
+    pub grant_id: String,
+    pub write: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,7 +114,26 @@ pub enum Tool {
     GetCurrentTime,
     GetSystemStatus,
     OpenUrl,
+    ListGrantedFolders,
+    ListDirectory,
+    ReadTextFile,
+    SearchFiles,
+    WriteFile,
+    MoveFile,
+    DeleteFile,
 }
+
+const MAX_READ_BYTES: u64 = 32 * 1024;
+const DEFAULT_READ_BYTES: u64 = 16 * 1024;
+const MAX_FILE_BYTES: u64 = 512 * 1024;
+const MAX_LIST_ENTRIES: u32 = 500;
+const DEFAULT_LIST_ENTRIES: u32 = 200;
+const MAX_SEARCH_RESULTS: u32 = 50;
+const DEFAULT_SEARCH_RESULTS: u32 = 20;
+const SEARCH_MAX_DEPTH: usize = 4;
+const SEARCH_SCAN_LIMIT: usize = 2000;
+const SEARCH_CONTENT_BYTES: u64 = 64 * 1024;
+const MAX_WRITE_BYTES: u64 = 256 * 1024;
 
 impl Tool {
     pub fn from_name(name: &str) -> Option<Self> {
@@ -38,6 +141,13 @@ impl Tool {
             "get_current_time" => Some(Self::GetCurrentTime),
             "get_system_status" => Some(Self::GetSystemStatus),
             "open_url" => Some(Self::OpenUrl),
+            "list_granted_folders" => Some(Self::ListGrantedFolders),
+            "list_directory" => Some(Self::ListDirectory),
+            "read_text_file" => Some(Self::ReadTextFile),
+            "search_files" => Some(Self::SearchFiles),
+            "write_file" => Some(Self::WriteFile),
+            "move_file" => Some(Self::MoveFile),
+            "delete_file" => Some(Self::DeleteFile),
             _ => None,
         }
     }
@@ -47,12 +157,27 @@ impl Tool {
             Self::GetCurrentTime => "get_current_time",
             Self::GetSystemStatus => "get_system_status",
             Self::OpenUrl => "open_url",
+            Self::ListGrantedFolders => "list_granted_folders",
+            Self::ListDirectory => "list_directory",
+            Self::ReadTextFile => "read_text_file",
+            Self::SearchFiles => "search_files",
+            Self::WriteFile => "write_file",
+            Self::MoveFile => "move_file",
+            Self::DeleteFile => "delete_file",
         }
     }
 
     /// Auto tools never require approval and are safe in every action mode.
     pub fn is_auto(&self) -> bool {
-        matches!(self, Self::GetCurrentTime | Self::GetSystemStatus)
+        matches!(
+            self,
+            Self::GetCurrentTime | Self::GetSystemStatus | Self::ListGrantedFolders
+        )
+    }
+
+    /// Tools that must be confirmed on every call, even in trust mode.
+    pub fn always_confirms(&self) -> bool {
+        matches!(self, Self::WriteFile | Self::MoveFile | Self::DeleteFile)
     }
 
     pub fn parse(&self, args: &serde_json::Value) -> Result<Parsed, String> {
@@ -65,23 +190,84 @@ impl Tool {
             Self::OpenUrl => {
                 let parsed: OpenUrlArgs = serde_json::from_value(args.clone())
                     .map_err(|_| "参数包含未允许的字段".to_owned())?;
-                if parsed.url.len() > 2048 {
-                    return Err("链接过长".to_owned());
+                let (url, host) = validate_https_url(&parsed.url)?;
+                Ok(Parsed::OpenUrl { url, host })
+            }
+            Self::ListGrantedFolders => {
+                serde_json::from_value::<EmptyArgs>(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                Ok(Parsed::ListGrantedFolders)
+            }
+            Self::ListDirectory => {
+                let parsed: ListDirectoryArgs = serde_json::from_value(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                Ok(Parsed::ListDirectory {
+                    grant_id: validate_grant_id(&parsed.grant_id)?,
+                    relative_path: validate_relative(&parsed.relative_path)?,
+                    max_entries: parsed
+                        .max_entries
+                        .unwrap_or(DEFAULT_LIST_ENTRIES)
+                        .clamp(1, MAX_LIST_ENTRIES),
+                })
+            }
+            Self::ReadTextFile => {
+                let parsed: ReadTextFileArgs = serde_json::from_value(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                Ok(Parsed::ReadTextFile {
+                    grant_id: validate_grant_id(&parsed.grant_id)?,
+                    relative_path: validate_relative(&parsed.relative_path)?,
+                    max_bytes: parsed
+                        .max_bytes
+                        .unwrap_or(DEFAULT_READ_BYTES)
+                        .clamp(1, MAX_READ_BYTES),
+                    offset: parsed.offset.unwrap_or(0).min(MAX_FILE_BYTES),
+                })
+            }
+            Self::SearchFiles => {
+                let parsed: SearchFilesArgs = serde_json::from_value(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                let query = parsed.query.trim().to_owned();
+                if query.is_empty() || query.chars().count() > 64 {
+                    return Err("搜索词应为 1 到 64 个字符".to_owned());
                 }
-                let url = Url::parse(&parsed.url).map_err(|_| "链接格式无效".to_owned())?;
-                if url.scheme() != "https" {
-                    return Err("只允许打开 HTTPS 链接".to_owned());
+                Ok(Parsed::SearchFiles {
+                    grant_id: validate_grant_id(&parsed.grant_id)?,
+                    relative_path: validate_relative(&parsed.relative_path)?,
+                    query,
+                    max_results: parsed
+                        .max_results
+                        .unwrap_or(DEFAULT_SEARCH_RESULTS)
+                        .clamp(1, MAX_SEARCH_RESULTS),
+                })
+            }
+            Self::WriteFile => {
+                let parsed: WriteFileArgs = serde_json::from_value(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                if parsed.content.len() as u64 > MAX_WRITE_BYTES {
+                    return Err(format!("写入内容超过 {} KB 上限", MAX_WRITE_BYTES / 1024));
                 }
-                if !url.username().is_empty() || url.password().is_some() {
-                    return Err("链接不能包含用户名或密码".to_owned());
-                }
-                let host = url.host_str().ok_or("链接缺少主机名")?.to_ascii_lowercase();
-                if host.is_empty() {
-                    return Err("链接缺少主机名".to_owned());
-                }
-                Ok(Parsed::OpenUrl {
-                    url: url.to_string(),
-                    host,
+                Ok(Parsed::WriteFile {
+                    grant_id: validate_grant_id(&parsed.grant_id)?,
+                    relative_path: validate_non_empty_relative(&parsed.relative_path)?,
+                    content: parsed.content,
+                    create_only: parsed.create_only,
+                })
+            }
+            Self::MoveFile => {
+                let parsed: MoveFileArgs = serde_json::from_value(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                Ok(Parsed::MoveFile {
+                    grant_id: validate_grant_id(&parsed.grant_id)?,
+                    from_path: validate_non_empty_relative(&parsed.from_relative_path)?,
+                    to_path: validate_non_empty_relative(&parsed.to_relative_path)?,
+                })
+            }
+            Self::DeleteFile => {
+                let parsed: DeleteFileArgs = serde_json::from_value(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                Ok(Parsed::DeleteFile {
+                    grant_id: validate_grant_id(&parsed.grant_id)?,
+                    relative_path: validate_non_empty_relative(&parsed.relative_path)?,
                 })
             }
         }
@@ -89,25 +275,139 @@ impl Tool {
 
     /// Persistent trust key used by "always allow" grants, when supported.
     pub fn bound_key(&self, parsed: &Parsed) -> Option<String> {
-        match (self, parsed) {
-            (Self::OpenUrl, Parsed::OpenUrl { host, .. }) => Some(format!("domain:{host}")),
+        match parsed {
+            Parsed::OpenUrl { host, .. } => Some(format!("domain:{host}")),
+            Parsed::ListDirectory { grant_id, .. }
+            | Parsed::ReadTextFile { grant_id, .. }
+            | Parsed::SearchFiles { grant_id, .. }
+            | Parsed::WriteFile { grant_id, .. }
+            | Parsed::MoveFile { grant_id, .. }
+            | Parsed::DeleteFile { grant_id, .. } => Some(format!("folder:{grant_id}")),
+            _ => None,
+        }
+    }
+
+    pub fn required_grant(&self, parsed: &Parsed) -> Option<GrantRequirement> {
+        match parsed {
+            Parsed::ListDirectory { grant_id, .. }
+            | Parsed::ReadTextFile { grant_id, .. }
+            | Parsed::SearchFiles { grant_id, .. } => Some(GrantRequirement {
+                grant_id: grant_id.clone(),
+                write: false,
+            }),
+            Parsed::WriteFile { grant_id, .. }
+            | Parsed::MoveFile { grant_id, .. }
+            | Parsed::DeleteFile { grant_id, .. } => Some(GrantRequirement {
+                grant_id: grant_id.clone(),
+                write: true,
+            }),
             _ => None,
         }
     }
 
     /// Human-readable target and impact shown in the approval dialog.
-    pub fn describe(&self, parsed: &Parsed) -> (String, String) {
+    pub fn describe(&self, ctx: &ToolContext, parsed: &Parsed) -> Result<Describe, String> {
         match (self, parsed) {
-            (Self::OpenUrl, Parsed::OpenUrl { url, host }) => {
-                (host.clone(), format!("用系统默认浏览器打开 {url}"))
+            (Self::OpenUrl, Parsed::OpenUrl { url, host }) => Ok(Describe {
+                target: host.clone(),
+                impact: format!("用系统默认浏览器打开 {url}"),
+                preview: None,
+            }),
+            (Self::GetCurrentTime, _) => read_only_describe("本机时间"),
+            (Self::GetSystemStatus, _) => read_only_describe("应用状态"),
+            (Self::ListGrantedFolders, _) => {
+                let labels: Vec<String> = ctx.grants.iter().map(|grant| grant.label.clone()).collect();
+                Ok(Describe {
+                    target: format!("{} 个已授权文件夹", ctx.grants.len()),
+                    impact: if labels.is_empty() {
+                        "列出授权目录（当前为空）".to_owned()
+                    } else {
+                        format!("列出授权目录名称与权限：{}", labels.join("、"))
+                    },
+                    preview: None,
+                })
             }
-            (Self::GetCurrentTime, _) => ("本机时间".to_owned(), "只读，不产生副作用".to_owned()),
-            (Self::GetSystemStatus, _) => ("应用状态".to_owned(), "只读，不产生副作用".to_owned()),
-            _ => ("未知目标".to_owned(), "未知影响".to_owned()),
+            (Self::ListDirectory, Parsed::ListDirectory { relative_path, .. }) => {
+                let path = resolve_read(ctx, relative_path)?;
+                Ok(Describe {
+                    target: path.display().to_string(),
+                    impact: format!("列出目录内容（相对路径 {}）", display_relative(relative_path)),
+                    preview: None,
+                })
+            }
+            (Self::ReadTextFile, Parsed::ReadTextFile { relative_path, .. }) => {
+                let path = resolve_read(ctx, relative_path)?;
+                Ok(Describe {
+                    target: path.display().to_string(),
+                    impact: format!("读取文本文件（相对路径 {}）", display_relative(relative_path)),
+                    preview: None,
+                })
+            }
+            (Self::SearchFiles, Parsed::SearchFiles { relative_path, query, .. }) => {
+                let path = resolve_read(ctx, relative_path)?;
+                Ok(Describe {
+                    target: path.display().to_string(),
+                    impact: format!(
+                        "在相对路径 {} 下搜索“{query}”",
+                        display_relative(relative_path)
+                    ),
+                    preview: None,
+                })
+            }
+            (
+                Self::WriteFile,
+                Parsed::WriteFile {
+                    relative_path,
+                    content,
+                    create_only,
+                    ..
+                },
+            ) => {
+                let path = resolve_write(ctx, relative_path)?;
+                let exists = path.exists();
+                if *create_only && exists {
+                    return Err("目标文件已存在，createOnly 已阻止覆盖".to_owned());
+                }
+                let old = read_optional_text(&path);
+                let mut preview = String::new();
+                preview.push_str(if exists { "覆盖现有文件\n" } else { "新建文件\n" });
+                preview.push_str(&bounded_diff(old.as_deref(), content));
+                Ok(Describe {
+                    target: path.display().to_string(),
+                    impact: format!(
+                        "写入文本文件（相对路径 {}，{} 字节）",
+                        display_relative(relative_path),
+                        content.len()
+                    ),
+                    preview: Some(preview),
+                })
+            }
+            (Self::MoveFile, Parsed::MoveFile { from_path, to_path, .. }) => {
+                let source = resolve_read(ctx, from_path)?;
+                let destination = resolve_write(ctx, to_path)?;
+                Ok(Describe {
+                    target: destination.display().to_string(),
+                    impact: format!(
+                        "在同一授权目录内移动：{} → {}",
+                        display_relative(from_path),
+                        display_relative(to_path)
+                    ),
+                    preview: Some(format!("{} → {}", source.display(), destination.display())),
+                })
+            }
+            (Self::DeleteFile, Parsed::DeleteFile { relative_path, .. }) => {
+                let path = resolve_read(ctx, relative_path)?;
+                Ok(Describe {
+                    target: path.display().to_string(),
+                    impact: "移入系统废纸篓（可恢复）".to_owned(),
+                    preview: None,
+                })
+            }
+            _ => Err("工具参数不匹配".to_owned()),
         }
     }
 
-    pub fn execute(&self, parsed: &Parsed) -> Result<ToolOutcome, String> {
+    pub fn execute(&self, ctx: &ToolContext, parsed: &Parsed) -> Result<ToolOutcome, String> {
         match (self, parsed) {
             (Self::GetCurrentTime, _) => Ok(ToolOutcome::success(format!(
                 "当前本地时间：{}",
@@ -117,9 +417,506 @@ impl Tool {
                 "桌面核心已运行；Agent 与语音状态请查看面板。".to_owned(),
             )),
             (Self::OpenUrl, Parsed::OpenUrl { url, .. }) => open_https(url),
+            (Self::ListGrantedFolders, _) => Ok(ToolOutcome::success(
+                serde_json::to_string(&ctx.grants).unwrap_or_else(|_| "[]".to_owned()),
+            )),
+            (
+                Self::ListDirectory,
+                Parsed::ListDirectory {
+                    relative_path,
+                    max_entries,
+                    ..
+                },
+            ) => list_directory(ctx, relative_path, *max_entries),
+            (
+                Self::ReadTextFile,
+                Parsed::ReadTextFile {
+                    relative_path,
+                    max_bytes,
+                    offset,
+                    ..
+                },
+            ) => read_text_file(ctx, relative_path, *max_bytes, *offset),
+            (
+                Self::SearchFiles,
+                Parsed::SearchFiles {
+                    relative_path,
+                    query,
+                    max_results,
+                    ..
+                },
+            ) => search_files(ctx, relative_path, query, *max_results),
+            (
+                Self::WriteFile,
+                Parsed::WriteFile {
+                    relative_path,
+                    content,
+                    create_only,
+                    ..
+                },
+            ) => write_text_file(ctx, relative_path, content, *create_only),
+            (Self::MoveFile, Parsed::MoveFile { from_path, to_path, .. }) => {
+                move_within_grant(ctx, from_path, to_path)
+            }
+            (Self::DeleteFile, Parsed::DeleteFile { relative_path, .. }) => {
+                delete_to_trash(ctx, relative_path)
+            }
             _ => Err("工具参数不匹配".to_owned()),
         }
     }
+}
+
+fn read_only_describe(target: &str) -> Result<Describe, String> {
+    Ok(Describe {
+        target: target.to_owned(),
+        impact: "只读，不产生副作用".to_owned(),
+        preview: None,
+    })
+}
+
+fn validate_https_url(value: &str) -> Result<(String, String), String> {
+    if value.len() > 2048 {
+        return Err("链接过长".to_owned());
+    }
+    let url = Url::parse(value).map_err(|_| "链接格式无效".to_owned())?;
+    if url.scheme() != "https" {
+        return Err("只允许打开 HTTPS 链接".to_owned());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("链接不能包含用户名或密码".to_owned());
+    }
+    let host = url.host_str().ok_or("链接缺少主机名")?.to_ascii_lowercase();
+    if host.is_empty() {
+        return Err("链接缺少主机名".to_owned());
+    }
+    Ok((url.to_string(), host))
+}
+
+fn validate_grant_id(value: &str) -> Result<String, String> {
+    if value.len() != 32 || !value.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("目录授权标识无效".to_owned());
+    }
+    Ok(value.to_ascii_lowercase())
+}
+
+fn validate_relative(value: &str) -> Result<String, String> {
+    // Reuse the confinement helper so argument validation and path resolution
+    // agree on what a relative path is.
+    super::paths::safe_relative(value).map_err(|error| error.to_string())?;
+    Ok(value.to_owned())
+}
+
+fn validate_non_empty_relative(value: &str) -> Result<String, String> {
+    let validated = validate_relative(value)?;
+    if validated.trim().is_empty() {
+        return Err("必须提供相对路径".to_owned());
+    }
+    Ok(validated)
+}
+
+fn display_relative(value: &str) -> String {
+    if value.trim().is_empty() {
+        "（授权目录根）".to_owned()
+    } else {
+        value.to_owned()
+    }
+}
+
+fn resolve_read(ctx: &ToolContext, relative_path: &str) -> Result<PathBuf, String> {
+    let folder = ctx
+        .folder
+        .as_ref()
+        .ok_or("该目录尚未授权".to_owned())?;
+    let policy = PathPolicy::from_app(ctx.app);
+    resolve_read_path(Path::new(&folder.path), relative_path, &policy)
+}
+
+fn list_directory(ctx: &ToolContext, relative_path: &str, max_entries: u32) -> Result<ToolOutcome, String> {
+    let folder = ctx.folder.as_ref().ok_or("该目录尚未授权")?;
+    let path = resolve_read(ctx, relative_path)?;
+    let metadata = std::fs::metadata(&path).map_err(|_| "目录不存在或不可访问".to_owned())?;
+    if !metadata.is_dir() {
+        return Err("目标不是目录".to_owned());
+    }
+    let mut entries = Vec::new();
+    let reader = std::fs::read_dir(&path).map_err(|_| "无法读取目录".to_owned())?;
+    for entry in reader.flatten() {
+        if entries.len() >= max_entries as usize {
+            break;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        // Never follow symlinks while listing or searching: a link inside the
+        // grant could otherwise point outside it.
+        if file_type.is_symlink() {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let kind = if metadata.is_dir() {
+            "dir"
+        } else if metadata.is_file() {
+            "file"
+        } else {
+            "other"
+        };
+        entries.push(serde_json::json!({
+            "name": name,
+            "kind": kind,
+            "bytes": if metadata.is_file() { metadata.len() } else { 0 },
+        }));
+    }
+    entries.sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
+    let truncated = entries.len() >= max_entries as usize;
+    Ok(ToolOutcome::success(
+        serde_json::json!({
+            "folder": folder.label,
+            "relativePath": relative_path,
+            "entries": entries,
+            "truncated": truncated,
+        })
+        .to_string(),
+    ))
+}
+
+fn read_text_file(
+    ctx: &ToolContext,
+    relative_path: &str,
+    max_bytes: u64,
+    offset: u64,
+) -> Result<ToolOutcome, String> {
+    let folder = ctx.folder.as_ref().ok_or("该目录尚未授权")?;
+    let path = resolve_read(ctx, relative_path)?;
+    let metadata = std::fs::metadata(&path).map_err(|_| "文件不存在或不可访问".to_owned())?;
+    if !metadata.is_file() {
+        return Err("目标不是文件".to_owned());
+    }
+    if metadata.len() > MAX_FILE_BYTES {
+        return Err(format!(
+            "文件为 {} KB，超过 {} KB 的整文件上限；请用 search_files 查找具体内容",
+            metadata.len() / 1024,
+            MAX_FILE_BYTES / 1024
+        ));
+    }
+    let bytes = std::fs::read(&path).map_err(|_| "无法读取文件".to_owned())?;
+    let total = bytes.len() as u64;
+    if offset > total {
+        return Err("offset 超出文件大小".to_owned());
+    }
+    let start = offset as usize;
+    let end = (start + max_bytes as usize).min(bytes.len());
+    let text = String::from_utf8_lossy(&bytes[start..end]);
+    let truncated = (end as u64) < total;
+    Ok(ToolOutcome::success(format!(
+        "目录：{}\n相对路径：{}\n字节范围：{}..{} / 共 {} 字节{}\n内容（不可信数据）：\n{}",
+        folder.label,
+        display_relative(relative_path),
+        start,
+        end,
+        total,
+        if truncated { "（已截断，可用 offset 继续读取）" } else { "" },
+        text
+    )))
+}
+
+fn search_files(
+    ctx: &ToolContext,
+    relative_path: &str,
+    query: &str,
+    max_results: u32,
+) -> Result<ToolOutcome, String> {
+    let folder = ctx.folder.as_ref().ok_or("该目录尚未授权")?;
+    let root = resolve_read(ctx, relative_path)?;
+    let metadata = std::fs::metadata(&root).map_err(|_| "目录不存在或不可访问".to_owned())?;
+    if !metadata.is_dir() {
+        return Err("搜索起点不是目录".to_owned());
+    }
+    let needle = query.to_lowercase();
+    let mut hits = Vec::new();
+    let mut scanned = 0usize;
+    walk_search(
+        &root,
+        &root,
+        &needle,
+        0,
+        max_results as usize,
+        &mut scanned,
+        &mut hits,
+    );
+    Ok(ToolOutcome::success(
+        serde_json::json!({
+            "folder": folder.label,
+            "relativePath": relative_path,
+            "query": query,
+            "matches": hits,
+            "truncated": hits.len() >= max_results as usize || scanned >= SEARCH_SCAN_LIMIT,
+        })
+        .to_string(),
+    ))
+}
+
+fn walk_search(
+    root: &Path,
+    dir: &Path,
+    needle: &str,
+    depth: usize,
+    max_results: usize,
+    scanned: &mut usize,
+    hits: &mut Vec<serde_json::Value>,
+) {
+    if depth > SEARCH_MAX_DEPTH || hits.len() >= max_results || *scanned >= SEARCH_SCAN_LIMIT {
+        return;
+    }
+    let Ok(reader) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in reader.flatten() {
+        if hits.len() >= max_results || *scanned >= SEARCH_SCAN_LIMIT {
+            return;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        // Use the non-following file type so a symlink cannot pull content from
+        // outside the granted folder into the search results.
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        *scanned += 1;
+        if file_type.is_dir() {
+            walk_search(root, &entry.path(), needle, depth + 1, max_results, scanned, hits);
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let path = entry.path();
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .to_string();
+        let name_match = name.to_lowercase().contains(needle);
+        let mut content_match = false;
+        if is_text_name(&name) && metadata.len() <= SEARCH_CONTENT_BYTES {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                content_match = text.to_lowercase().contains(needle);
+            }
+        }
+        if name_match || content_match {
+            hits.push(serde_json::json!({
+                "relativePath": relative,
+                "bytes": metadata.len(),
+                "nameMatch": name_match,
+                "contentMatch": content_match,
+            }));
+        }
+    }
+}
+
+fn resolve_write(ctx: &ToolContext, relative_path: &str) -> Result<PathBuf, String> {
+    let folder = ctx.folder.as_ref().ok_or("该目录尚未授权")?;
+    let policy = PathPolicy::from_app(ctx.app);
+    resolve_write_path(Path::new(&folder.path), relative_path, &policy)
+}
+
+fn grant_root(ctx: &ToolContext) -> Result<PathBuf, String> {
+    let folder = ctx.folder.as_ref().ok_or("该目录尚未授权")?;
+    std::fs::canonicalize(&folder.path).map_err(|_| "授权目录当前不可用".to_owned())
+}
+
+fn read_optional_text(path: &Path) -> Option<String> {
+    let metadata = std::fs::metadata(path).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_WRITE_BYTES {
+        return None;
+    }
+    std::fs::read_to_string(path).ok()
+}
+
+/// Focused line diff for the approval preview: trims the common prefix/suffix
+/// and shows removed/added lines, bounded in both line count and characters.
+fn bounded_diff(old: Option<&str>, new: &str) -> String {
+    const MAX_LINES: usize = 40;
+    const MAX_CHARS: usize = 2400;
+    if let Some(old_text) = old {
+        if old_text == new {
+            return "  内容无变化\n".to_owned();
+        }
+    }
+    let old_lines: Vec<&str> = old.unwrap_or("").lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+    let mut start = 0;
+    while start < old_lines.len() && start < new_lines.len() && old_lines[start] == new_lines[start] {
+        start += 1;
+    }
+    let mut old_end = old_lines.len();
+    let mut new_end = new_lines.len();
+    while old_end > start && new_end > start && old_lines[old_end - 1] == new_lines[new_end - 1] {
+        old_end -= 1;
+        new_end -= 1;
+    }
+    let mut body = String::new();
+    let mut lines = 0usize;
+    if start > 0 {
+        body.push_str(&format!("  … 前 {start} 行未变化\n"));
+    }
+    for line in &old_lines[start..old_end] {
+        if lines >= MAX_LINES || body.len() >= MAX_CHARS {
+            body.push_str("  … 已截断\n");
+            return body;
+        }
+        body.push_str(&format!("- {line}\n"));
+        lines += 1;
+    }
+    for line in &new_lines[start..new_end] {
+        if lines >= MAX_LINES || body.len() >= MAX_CHARS {
+            body.push_str("  … 已截断\n");
+            return body;
+        }
+        body.push_str(&format!("+ {line}\n"));
+        lines += 1;
+    }
+    if body.is_empty() {
+        body.push_str("  内容无变化\n");
+    }
+    body
+}
+
+fn write_text_file(
+    ctx: &ToolContext,
+    relative_path: &str,
+    content: &str,
+    create_only: bool,
+) -> Result<ToolOutcome, String> {
+    let folder = ctx.folder.as_ref().ok_or("该目录尚未授权")?;
+    let target = resolve_write(ctx, relative_path)?;
+    let exists = target.exists();
+    if create_only && exists {
+        return Err("目标文件已存在，createOnly 已阻止覆盖".to_owned());
+    }
+    let file_name = target
+        .file_name()
+        .ok_or("目标文件名无效")?
+        .to_string_lossy()
+        .to_string();
+    let temp = target.with_file_name(format!(".{file_name}.phoebe-{}.tmp", std::process::id()));
+    std::fs::write(&temp, content.as_bytes()).map_err(|_| "无法写入临时文件".to_owned())?;
+    if std::fs::rename(&temp, &target).is_err() {
+        let _ = std::fs::remove_file(&temp);
+        return Err("无法保存文件".to_owned());
+    }
+    Ok(ToolOutcome::success(format!(
+        "已{}文件：{}/{}（{} 字节）",
+        if exists { "覆盖" } else { "创建" },
+        folder.label,
+        display_relative(relative_path),
+        content.len()
+    )))
+}
+
+fn move_within_grant(ctx: &ToolContext, from: &str, to: &str) -> Result<ToolOutcome, String> {
+    let folder = ctx.folder.as_ref().ok_or("该目录尚未授权")?;
+    let root = grant_root(ctx)?;
+    let source = resolve_read(ctx, from)?;
+    if source == root {
+        return Err("不能移动授权目录本身".to_owned());
+    }
+    let destination = resolve_write(ctx, to)?;
+    if destination.exists() {
+        return Err("目标已存在，拒绝覆盖".to_owned());
+    }
+    std::fs::rename(&source, &destination).map_err(|_| "无法移动文件".to_owned())?;
+    Ok(ToolOutcome::success(format!(
+        "已移动：{}/{} → {}",
+        folder.label,
+        display_relative(from),
+        display_relative(to)
+    )))
+}
+
+fn delete_to_trash(ctx: &ToolContext, relative_path: &str) -> Result<ToolOutcome, String> {
+    let folder = ctx.folder.as_ref().ok_or("该目录尚未授权")?;
+    let root = grant_root(ctx)?;
+    let source = resolve_read(ctx, relative_path)?;
+    if source == root {
+        return Err("不能删除授权目录本身".to_owned());
+    }
+    let trash = trash_dir(ctx.app);
+    std::fs::create_dir_all(&trash).map_err(|_| "无法建立废纸篓目录".to_owned())?;
+    let name = source.file_name().ok_or("文件名无效")?.to_owned();
+    let target = unique_destination(&trash, &name);
+    std::fs::rename(&source, &target).map_err(|error| match error.kind() {
+        std::io::ErrorKind::CrossesDevices => {
+            "目标位于不同磁盘卷，暂不支持跨卷移入废纸篓".to_owned()
+        }
+        _ => "无法移入废纸篓".to_owned(),
+    })?;
+    Ok(ToolOutcome::success(format!(
+        "已将 {}/{} 移入废纸篓，可在系统废纸篓恢复",
+        folder.label,
+        display_relative(relative_path)
+    )))
+}
+
+/// macOS uses the real per-user Trash; other platforms fall back to a
+/// recoverable quarantine inside the application data directory.
+fn trash_dir(app: &tauri::AppHandle) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = app.path().home_dir() {
+            return home.join(".Trash");
+        }
+    }
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("file-trash"))
+        .unwrap_or_else(|_| std::env::temp_dir().join("phoebe-file-trash"))
+}
+
+fn unique_destination(dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
+    let candidate = dir.join(name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let path = Path::new(name);
+    let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("file");
+    let extension = path.extension().and_then(|value| value.to_str());
+    for index in 1..10_000 {
+        let file_name = match extension {
+            Some(extension) => format!("{stem} {index}.{extension}"),
+            None => format!("{stem} {index}"),
+        };
+        let candidate = dir.join(file_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    dir.join(format!("{stem}-{}", chrono::Utc::now().timestamp_millis()))
+}
+
+fn is_text_name(name: &str) -> bool {
+    const TEXT_EXTENSIONS: [&str; 22] = [
+        "txt", "md", "markdown", "csv", "tsv", "json", "jsonl", "log", "yaml", "yml", "toml",
+        "ini", "conf", "rs", "ts", "tsx", "js", "mjs", "py", "html", "css", "sql",
+    ];
+    Path::new(name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| TEXT_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
 }
 
 /// Launches the default handler for a validated HTTPS URL. No shell is used,
@@ -148,6 +945,7 @@ mod tests {
     fn unknown_tools_are_rejected() {
         assert!(Tool::from_name("bash").is_none());
         assert!(Tool::from_name("open_url").is_some());
+        assert!(Tool::from_name("read_text_file").is_some());
     }
 
     #[test]
@@ -191,5 +989,107 @@ mod tests {
             Some("domain:example.com")
         );
         assert!(Tool::GetCurrentTime.bound_key(&Parsed::Empty).is_none());
+    }
+
+    #[test]
+    fn file_tools_require_a_grant_and_relative_path() {
+        assert!(Tool::ReadTextFile
+            .parse(&json!({ "grantId": "not-a-grant", "relativePath": "a.txt" }))
+            .is_err());
+        assert!(Tool::ReadTextFile
+            .parse(&json!({ "grantId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "relativePath": "../x" }))
+            .is_err());
+        assert!(Tool::ReadTextFile
+            .parse(&json!({ "grantId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "relativePath": "/etc/passwd" }))
+            .is_err());
+        assert!(Tool::ReadTextFile
+            .parse(&json!({ "grantId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "relativePath": "a.txt", "path": "/etc/passwd" }))
+            .is_err());
+        let parsed = Tool::ReadTextFile
+            .parse(&json!({ "grantId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "relativePath": "a.txt" }))
+            .unwrap();
+        assert!(matches!(parsed, Parsed::ReadTextFile { ref grant_id, .. } if grant_id == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        assert_eq!(
+            Tool::ReadTextFile.bound_key(&parsed).as_deref(),
+            Some("folder:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+    }
+
+    #[test]
+    fn search_bounds_its_query_and_limits() {
+        let grant = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        assert!(Tool::SearchFiles
+            .parse(&json!({ "grantId": grant, "relativePath": "", "query": "  " }))
+            .is_err());
+        assert!(Tool::SearchFiles
+            .parse(&json!({ "grantId": grant, "relativePath": "", "query": "x".repeat(65) }))
+            .is_err());
+        let parsed = Tool::SearchFiles
+            .parse(&json!({ "grantId": grant, "relativePath": "", "query": "note", "maxResults": 9999 }))
+            .unwrap();
+        assert!(matches!(parsed, Parsed::SearchFiles { max_results: 50, .. }));
+    }
+
+    #[test]
+    fn read_offset_defaults_and_is_bounded() {
+        let grant = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let parsed = Tool::ReadTextFile
+            .parse(&json!({ "grantId": grant, "relativePath": "a.txt", "offset": 100 }))
+            .unwrap();
+        assert!(matches!(parsed, Parsed::ReadTextFile { offset: 100, .. }));
+        let defaulted = Tool::ReadTextFile
+            .parse(&json!({ "grantId": grant, "relativePath": "a.txt" }))
+            .unwrap();
+        assert!(matches!(defaulted, Parsed::ReadTextFile { offset: 0, max_bytes: 16_384, .. }));
+    }
+
+    #[test]
+    fn write_tools_require_write_grant_and_bounded_content() {
+        let grant = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let parsed = Tool::WriteFile
+            .parse(&json!({ "grantId": grant, "relativePath": "a.txt", "content": "hi" }))
+            .unwrap();
+        let requirement = Tool::WriteFile.required_grant(&parsed).unwrap();
+        assert!(requirement.write);
+        assert!(Tool::WriteFile.always_confirms());
+        assert!(!Tool::ReadTextFile.always_confirms());
+
+        assert!(Tool::WriteFile
+            .parse(&json!({ "grantId": grant, "relativePath": "", "content": "hi" }))
+            .is_err());
+        assert!(Tool::WriteFile
+            .parse(&json!({ "grantId": grant, "relativePath": "a.txt", "content": "x".repeat(262_145) }))
+            .is_err());
+        assert!(Tool::WriteFile
+            .parse(&json!({ "grantId": grant, "relativePath": "a.txt", "content": "hi", "mode": "append" }))
+            .is_err());
+    }
+
+    #[test]
+    fn move_and_delete_reject_empty_or_escaping_paths() {
+        let grant = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        assert!(Tool::MoveFile
+            .parse(&json!({ "grantId": grant, "fromRelativePath": "a.txt", "toRelativePath": "../b.txt" }))
+            .is_err());
+        assert!(Tool::DeleteFile
+            .parse(&json!({ "grantId": grant, "relativePath": "" }))
+            .is_err());
+        assert!(Tool::DeleteFile
+            .parse(&json!({ "grantId": grant, "relativePath": "a.txt" }))
+            .is_ok());
+    }
+
+    #[test]
+    fn bounded_diff_marks_added_and_removed_lines() {
+        use super::bounded_diff;
+        let diff = bounded_diff(None, "one\ntwo");
+        assert!(diff.contains("+ one"));
+        assert!(diff.contains("+ two"));
+        let unchanged = bounded_diff(Some("same"), "same");
+        assert!(unchanged.contains("内容无变化"));
+        let changed = bounded_diff(Some("a\nb"), "a\nc");
+        assert!(changed.contains("- b"));
+        assert!(changed.contains("+ c"));
+        assert!(changed.contains("前 1 行未变化"));
     }
 }

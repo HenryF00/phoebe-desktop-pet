@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { ActionMode, ApprovalDecision, ApprovalRequest, AssistantEvent, AssistantReply, AuditEntry, SystemStatus, TokenUsage, ToolResult } from "@phoebe/shared";
+import type { ActionMode, ApprovalDecision, ApprovalRequest, AssistantEvent, AssistantReply, AuditEntry, FolderGrantView, SystemStatus, TokenUsage, ToolResult } from "@phoebe/shared";
 import { MemorySection } from "./MemorySection";
 import { selectPetClip, usePetAnimation, useReducedMotion } from "./petAnimation";
 import "./style.css";
@@ -80,6 +80,7 @@ const StopIcon = () => <Icon><rect x="7" y="7" width="10" height="10" rx="2" fil
 const FileIcon = () => <Icon><path d="M7 3h7l4 4v14H7z" /><path d="M14 3v5h5M10 13h5M10 17h5" /></Icon>;
 const LocationIcon = () => <Icon><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z" /><circle cx="12" cy="10" r="2.4" /></Icon>;
 const InfoIcon = () => <Icon><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7.5h.01" /></Icon>;
+const FolderIcon = () => <Icon><path d="M3 6h6l2 2h10v10H3z" /></Icon>;
 const ChevronDownIcon = () => <Icon><path d="m7 10 5 5 5-5" /></Icon>;
 const ToolIcon = () => <Icon><path d="m14.7 6.3 3-3a4 4 0 0 1-5.2 5.2L6 15l-3 1 1-3 6.5-6.5a4 4 0 0 1 5.2-5.2l-3 3 2 2Z" /></Icon>;
 const DownIcon = () => <Icon><path d="m7 9 5 5 5-5" /></Icon>;
@@ -100,6 +101,13 @@ const toolLabels: Record<string, string> = {
   web_search: "搜索网页",
   read_selected_file: "读取所选文件",
   get_device_location: "使用本轮位置",
+  list_granted_folders: "查看授权文件夹",
+  list_directory: "列出目录",
+  read_text_file: "读取文本文件",
+  search_files: "搜索文件",
+  write_file: "写入文件",
+  move_file: "移动文件",
+  delete_file: "删除到废纸篓",
   launch_wuthering_waves: "启动应用",
   launch_application: "启动应用",
   open_url: "打开链接",
@@ -138,6 +146,8 @@ function SettingsApp() {
   const [memoryResetToken, setMemoryResetToken] = React.useState(0);
   const [audit, setAudit] = React.useState<AuditEntry[]>([]);
   const [auditNotice, setAuditNotice] = React.useState("");
+  const [grants, setGrants] = React.useState<FolderGrantView[]>([]);
+  const [grantNotice, setGrantNotice] = React.useState("");
   const headingRef = React.useRef<HTMLHeadingElement>(null);
   const closeRef = React.useRef<HTMLButtonElement>(null);
   const keyRef = React.useRef<HTMLInputElement>(null);
@@ -165,6 +175,7 @@ function SettingsApp() {
         void invoke<SystemStatus>("get_system_status").then(value => { if (!disposed) setStatus(value); }).catch(() => { if (!disposed) setStatus(null); });
         void invoke<AutostartStatus>("get_autostart_status").then(value => { if (!disposed) setAutostart(value); }).catch(() => { if (!disposed) setNotice("无法刷新系统登录项状态。"); });
         void invoke<AuditEntry[]>("get_audit_log", { limit: 10 }).then(value => { if (!disposed) setAudit(value); }).catch(() => { if (!disposed) setAudit([]); });
+        void invoke<FolderGrantView[]>("list_folder_grants").then(value => { if (!disposed) setGrants(value); }).catch(() => { if (!disposed) setGrants([]); });
       } catch {
         if (disposed) return;
         setLoadError(true);
@@ -247,6 +258,15 @@ function SettingsApp() {
       setNotice(enabled ? "已登记开机启动。登录后会恢复桌宠，并在语音开启时后台预热内置声音。" : "已关闭开机启动。");
     } catch { setNotice("无法更新系统登录项。请检查系统权限后重试，原状态保持不变。"); }
     finally { setAutostartBusy(false); }
+  }
+
+  async function revokeGrant(id: string) {
+    if (!inTauri) return;
+    try {
+      await invoke("revoke_folder_grant", { grantId: id });
+      setGrants(current => current.filter(grant => grant.id !== id));
+      setGrantNotice("已撤销该文件夹授权。");
+    } catch { setGrantNotice("撤销失败，请重试。"); }
   }
 
   async function refreshAudit() {
@@ -347,6 +367,19 @@ function SettingsApp() {
             </select>
             <p className="field-help">聊天模式始终不注册操作工具。操作策略只决定应用内是否逐次确认，不能绕过 macOS 辅助功能、屏幕录制、文件与钥匙串等系统权限。信任模式目前只对“始终允许”过的网站生效。</p>
           </fieldset>
+          <fieldset className="settings-group"><legend>已授权文件夹</legend>
+            <p className="field-help">这些文件夹由你通过系统选择器授权；菲比只能使用其中的相对路径，既看不到绝对路径，也无法访问未授权位置。当前仅供只读。</p>
+            <div className="grant-list" role="list">
+              {grants.length === 0 && <p className="field-help">尚未授权任何文件夹。可在聊天窗的“＋”菜单中选择“授权文件夹”。</p>}
+              {grants.map(grant => <div className="grant-row" role="listitem" key={grant.id}>
+                <span className="grant-label">{grant.label}</span>
+                <span className="grant-path" title={grant.path}>{grant.path}</span>
+                <span className="grant-perm">{grant.read ? "只读" : ""}{grant.write ? `${grant.read ? " · " : ""}可写` : ""}</span>
+                <button type="button" className="is-danger" onClick={() => void revokeGrant(grant.id)}>撤销</button>
+              </div>)}
+            </div>
+            {grantNotice && <p className="field-help" role="status">{grantNotice}</p>}
+          </fieldset>
           <fieldset className="settings-group" disabled={loading || saving}>
             <legend>联网搜索</legend>
             <label htmlFor="search-proxy">本机搜索代理（可选）</label>
@@ -432,6 +465,8 @@ function ChatApp() {
   const [hasUnread, setHasUnread] = React.useState(false);
   const [voiceEvent, setVoiceEvent] = React.useState<VoiceEvent | null>(null);
   const [approval, setApproval] = React.useState<ApprovalRequest | null>(null);
+  const [grants, setGrants] = React.useState<FolderGrantView[]>([]);
+  const [grantBusy, setGrantBusy] = React.useState(false);
   const endRef = React.useRef<HTMLDivElement>(null);
   const bodyRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
@@ -448,6 +483,9 @@ function ChatApp() {
     let disposed = false;
     void invoke<ApprovalRequest | null>("get_pending_approval").then(value => {
       if (!disposed && value) { setApproval(value); setAssistantState("awaiting_approval"); }
+    }).catch(() => {});
+    void invoke<FolderGrantView[]>("list_folder_grants").then(list => {
+      if (!disposed) setGrants(list);
     }).catch(() => {});
     let unlisten: (() => void) | null = null;
     let unlistenHistory: (() => void) | null = null;
@@ -663,6 +701,22 @@ function ChatApp() {
     finally { setHistoryBusy(false); }
   }
 
+  async function chooseFolder(writable: boolean) {
+    if (!inTauri || grantBusy || activeRunId) return;
+    setToolMenuOpen(false);
+    setGrantBusy(true); setAttachmentNotice("");
+    try {
+      const grant = await invoke<FolderGrantView | null>("select_folder_grant", { writable });
+      if (grant) {
+        setGrants(current => [...current.filter(item => item.id !== grant.id), grant]);
+        setAttachmentNotice(writable
+          ? `已授权读写「${grant.label}」；每次写入或删除仍需你逐次确认，可随时在设置中撤销。`
+          : `已授权只读访问「${grant.label}」；菲比只能使用相对路径，可随时在设置中撤销。`);
+      }
+    } catch { setAttachmentNotice("无法授权文件夹；请重试。"); }
+    finally { setGrantBusy(false); }
+  }
+
   async function resolveApproval(decision: ApprovalDecision) {
     if (!approval) return;
     const id = approval.id;
@@ -841,6 +895,8 @@ function ChatApp() {
             {toolMenuOpen && <div className="chat-popover tool-menu">
               <button type="button" onClick={() => void chooseFile()}><FileIcon /><span><strong>选择文本文件</strong><small>仅授权本轮读取</small></span></button>
               <button type="button" onClick={() => void locateOnce()}><LocationIcon /><span><strong>使用当前位置</strong><small>单次获取，不持续跟踪</small></span></button>
+              <button type="button" onClick={() => void chooseFolder(false)} disabled={grantBusy}><FolderIcon /><span><strong>授权文件夹（只读）</strong><small>{grantBusy ? "正在选择…" : grants.length ? `已授权 ${grants.length} 个` : "可随时撤销"}</small></span></button>
+              <button type="button" onClick={() => void chooseFolder(true)} disabled={grantBusy}><FolderIcon /><span><strong>授权文件夹（可读写）</strong><small>写入与删除仍需逐次确认</small></span></button>
             </div>}
           </div>
           <label className="sr-only" htmlFor="message">发送消息给菲比</label>
@@ -878,6 +934,7 @@ function ChatApp() {
             <div><dt>影响</dt><dd>{approval.impact}</dd></div>
           </dl>
           <p className="approval-note">{approval.rememberable ? "「始终允许」只对该目标生效，之后不再逐次确认；可在设置中查看审计记录。" : "标准模式下每次操作都需要你确认，信任模式不会绕过系统权限。"}</p>
+          {approval.preview && <pre className="approval-preview">{approval.preview}</pre>}
           <div className="approval-actions">
             <button type="button" className="approval-deny" onClick={() => void resolveApproval("deny")}>拒绝</button>
             {approval.rememberable && <button type="button" className="approval-always" onClick={() => void resolveApproval("always")}>始终允许</button>}

@@ -29,7 +29,9 @@ test("file and location tools only expose the current authorized attachments", a
   let context = { file: null, location: null };
   const tools = createAgentTools({ getContext: () => context, fetchImpl: async () => ({ ok: true, text: async () => sample }) });
   assert.deepEqual(tools.map(tool => tool.name),
-    ["web_search", "read_selected_file", "get_device_location", "get_current_time", "get_system_status", "open_url"]);
+    ["web_search", "read_selected_file", "get_device_location", "get_current_time", "get_system_status", "open_url",
+      "list_granted_folders", "list_directory", "read_text_file", "search_files",
+      "write_file", "move_file", "delete_file"]);
   await assert.rejects(tools[1].execute("x", {}), /尚未/);
   await assert.rejects(tools[2].execute("x", {}), /尚未/);
   context = { file: { name: "x.txt", content: "hello" },

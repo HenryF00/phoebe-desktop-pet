@@ -9,6 +9,8 @@ import { createAgentTools, selectAgentTools, SAFE_DEFAULT_TOOLS } from "./tools.
 import { inferReplyMotion } from "./motion.mjs";
 import { buildSpeechText } from "./speech.mjs";
 import { addTokenUsage, emptyTokenUsage } from "./usage.mjs";
+import { pruneMessages } from "./context.mjs";
+import { describeFailure, lastAssistantMessage } from "./errors.mjs";
 
 // Only the Rust supervisor should launch this in production. No frontend IPC or local port.
 const models = createModels();
@@ -36,11 +38,12 @@ function toolsForTurn(allowed) {
   return selectAgentTools(getAllAgentTools(), allowed);
 }
 
-function systemPromptFor(memories = [], interactionMode = "assistant", allowed = SAFE_DEFAULT_TOOLS) {
+function systemPromptFor(memories = [], interactionMode = "assistant", allowed = SAFE_DEFAULT_TOOLS, folderGrants = []) {
   return buildSystemPrompt({
     memories,
     interactionMode,
     capabilities: toolsForTurn(allowed).map(({ name, description }) => ({ name, description })),
+    folderGrants,
   });
 }
 
@@ -53,6 +56,9 @@ function getAgent() {
       tools: getAllAgentTools(),
     },
     streamFn: models.streamSimple.bind(models),
+    // Runs before every provider request, including between tool calls inside a
+    // single turn, so accumulated tool output can never blow the context.
+    transformContext: async messages => pruneMessages(messages),
   });
   agent.subscribe(event => {
     if (!active) return;
@@ -152,13 +158,14 @@ async function handle(command) {
   }, 120_000);
   try {
     const currentAgent = getAgent();
-    currentAgent.state.systemPrompt = systemPromptFor(command.memories, command.interactionMode, allowed);
+    currentAgent.state.systemPrompt = systemPromptFor(command.memories, command.interactionMode, allowed, command.folderGrants || []);
     currentAgent.state.tools = toolsForTurn(allowed);
-    currentAgent.state.messages = currentAgent.state.messages.slice(-16);
+    currentAgent.state.messages = pruneMessages(currentAgent.state.messages);
     await currentAgent.prompt(command.text);
     if (run.timedOut) send({ type: "error", runId: run.runId, message: "模型回复超时；请重试" });
     else if (run.cancelled) send({ type: "cancelled", runId: run.runId });
-    else if (agent.state.errorMessage) send({ type: "error", runId: run.runId, message: "模型请求失败，请检查连接、余额和模型配置" });
+    else if (agent.state.errorMessage) send({ type: "error", runId: run.runId, message: describeFailure({
+      lastAssistant: lastAssistantMessage(agent), errorMessage: agent.state.errorMessage, contextWindow: model.contextWindow }) });
     else {
       const motion = inferReplyMotion({ replyText: run.text, userText: run.userText, usedTool: run.usedTool });
       const displayText = run.text.trim();
@@ -168,17 +175,18 @@ async function handle(command) {
         ...motion,
       } });
     }
-  } catch {
+  } catch (error) {
     send(run.timedOut
       ? { type: "error", runId: run.runId, message: "模型回复超时；请重试" }
       : run.cancelled
       ? { type: "cancelled", runId: run.runId }
-      : { type: "error", runId: run.runId, message: "模型请求失败，请稍后重试" });
+      : { type: "error", runId: run.runId, message: describeFailure({
+          lastAssistant: lastAssistantMessage(agent), errorMessage: agent?.state?.errorMessage, error, contextWindow: model.contextWindow }) });
   } finally {
     clearTimeout(timeout);
     abortPending(run.runId);
     if (agent && !agent.state.isStreaming) {
-      agent.state.messages = command.file || command.location ? [] : agent.state.messages.slice(-16);
+      agent.state.messages = command.file || command.location ? [] : pruneMessages(agent.state.messages);
     }
     active = null;
     toolContext = null;

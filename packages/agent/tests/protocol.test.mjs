@@ -85,3 +85,14 @@ test("prompt tool lists are validated and deduplicated", () => {
   const withoutTools = parseCommand('{"type":"prompt","runId":"r1","text":"x"}');
   assert.equal("tools" in withoutTools, false);
 });
+
+test("folder grants are bounded and stripped to approved fields", () => {
+  const grant = { grantId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", label: "Notes", read: true, write: false, path: "/secret" };
+  const command = parseCommand(JSON.stringify({ type: "prompt", runId: "r1", text: "x", folderGrants: [grant] }));
+  assert.deepEqual(command.folderGrants,
+    [{ grantId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", label: "Notes", read: true, write: false }]);
+  assert.throws(() => parseCommand(JSON.stringify({ type: "prompt", runId: "r1", text: "x",
+    folderGrants: [{ grantId: "short", label: "x", read: true, write: false }] })));
+  const withoutGrants = parseCommand('{"type":"prompt","runId":"r1","text":"x"}');
+  assert.equal("folderGrants" in withoutGrants, false);
+});

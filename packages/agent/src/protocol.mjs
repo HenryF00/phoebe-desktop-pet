@@ -82,8 +82,22 @@ export function parseCommand(line) {
       }
       if (names.size) tools = [...names];
     }
+    let folderGrants = null;
+    if (value.folderGrants !== undefined && value.folderGrants !== null) {
+      if (!Array.isArray(value.folderGrants) || value.folderGrants.length > 100)
+        throw new Error("invalid folder grants");
+      folderGrants = value.folderGrants.map(grant => {
+        if (!grant || typeof grant !== "object" || Array.isArray(grant)
+            || typeof grant.grantId !== "string" || !/^[0-9a-f]{32}$/.test(grant.grantId)
+            || typeof grant.label !== "string" || !grant.label.trim() || Buffer.byteLength(grant.label) > 120
+            || typeof grant.read !== "boolean" || typeof grant.write !== "boolean")
+          throw new Error("invalid folder grant");
+        return { grantId: grant.grantId, label: grant.label, read: grant.read, write: grant.write };
+      });
+    }
     const command = { type: "prompt", runId: value.runId, text: value.text, interactionMode, memories: checked, file, location };
     if (tools) command.tools = tools;
+    if (folderGrants) command.folderGrants = folderGrants;
     return command;
   }
   throw new Error("unsupported command");

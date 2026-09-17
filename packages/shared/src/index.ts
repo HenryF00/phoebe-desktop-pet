@@ -26,6 +26,7 @@ export interface TokenUsage {
 export type ToolName =
   | "get_current_time" | "get_system_status" | "web_search" | "read_selected_file" | "get_device_location" | "launch_wuthering_waves"
   | "launch_application" | "open_url" | "focus_application"
+  | "list_granted_folders" | "list_directory" | "read_text_file" | "search_files"
   | "remember_preference" | "forget_preference";
 
 export interface ToolCall {
@@ -42,6 +43,18 @@ export interface ApprovalRequest {
   impact: string;
   scope: "once" | "bound_target";
   rememberable: boolean;
+  /** Optional bounded preview, such as a write diff. Shown to the user only. */
+  preview?: string;
+}
+
+/** A folder the user granted through the native directory picker. */
+export interface FolderGrantView {
+  id: string;
+  path: string;
+  label: string;
+  read: boolean;
+  write: boolean;
+  createdAt: string;
 }
 
 /** User answer to an {@link ApprovalRequest}. */
