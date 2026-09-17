@@ -155,15 +155,26 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   padding: 8px;
   color: var(--chat-text);
 }
+.chat-shell.is-chat {
+  --chat-primary: #b5653a;
+  --chat-primary-strong: #9a5128;
+  --chat-blue: #b5653a;
+  --chat-gold: #d98a5f;
+  --chat-gold-strong: #a5583a;
+  --chat-surface-accent: #fbece2;
+}
+.chat-shell.is-chat .chat-header { background: linear-gradient(112deg, rgba(255,253,248,.96), rgba(253,240,233,.95) 72%, rgba(244,208,168,.38)); }
 .chat-shell button:focus-visible, .chat-shell a:focus-visible { outline: 2px solid var(--chat-primary); outline-offset: 1px; }
 .chat-shell textarea:focus-visible { outline: 0; }
 .chat-card { position: relative; width: 416px; max-width: 100%; height: 584px; max-height: 100%; border: 1px solid color-mix(in srgb, var(--chat-gold) 28%, var(--chat-border)); border-radius: 22px; background: var(--chat-bg); box-shadow: 0 20px 48px rgba(32,58,99,.18), 0 0 0 1px rgba(255,255,255,.72) inset; display: flex; flex-direction: column; overflow: hidden; }
 .chat-header { position: relative; z-index: 20; flex: 0 0 auto; min-height: 64px; display: flex; align-items: center; gap: 11px; padding: 9px 10px 9px 13px; border-bottom: 1px solid var(--chat-border); background: linear-gradient(112deg, rgba(255,253,248,.96), rgba(239,246,255,.95) 72%, rgba(241,224,187,.38)); backdrop-filter: blur(16px); }
 .chat-avatar, .speaker-avatar, .empty-avatar { position: relative; overflow: hidden; border-radius: 50%; background: #eef4fc; }
 .chat-avatar { flex: 0 0 38px; width: 38px; height: 38px; border: 1px solid color-mix(in srgb, var(--chat-gold) 68%, white); box-shadow: 0 0 0 3px rgba(41,105,205,.07); }
-.chat-avatar img { position: absolute; top: -3px; left: -21px; display: block; width: 78px; height: 78px; max-width: none; }
+.chat-avatar img { position: absolute; top: -5px; left: -15px; display: block; width: 68px; height: 68px; max-width: none; }
 .chat-identity { min-width: 0; flex: 1; }
 .chat-identity h1 { margin: 0; color: #293665; font-size: 16px; line-height: 1.2; letter-spacing: -.01em; }
+.mode-badge { display: inline-block; margin-left: 4px; padding: 2px 7px; border: 1px solid color-mix(in srgb, var(--chat-primary) 32%, var(--chat-border)); border-radius: 999px; background: var(--chat-surface-accent); color: var(--chat-primary-strong); font-size: 10px; font-weight: 700; letter-spacing: .04em; vertical-align: 1px; }
+.mode-badge.is-chat { border-color: color-mix(in srgb, var(--chat-gold) 46%, var(--chat-border)); background: color-mix(in srgb, var(--chat-gold) 12%, white); color: var(--chat-gold-strong); }
 .chat-identity p { display: flex; align-items: center; gap: 6px; margin: 4px 0 0; color: var(--chat-muted); font-size: 11px; font-weight: 550; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #a09aa7; box-shadow: 0 0 0 3px color-mix(in srgb, #a09aa7 12%, transparent); }
 .status-dot.is-ready { background: #4f9d74; box-shadow: 0 0 0 3px color-mix(in srgb, #4f9d74 14%, transparent); }
@@ -200,7 +211,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .chat-body::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 99px; background: color-mix(in srgb, var(--chat-muted) 28%, transparent); background-clip: padding-box; }
 .empty-chat { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 10px 32px; text-align: center; }
 .empty-avatar { width: 70px; height: 70px; margin-bottom: 16px; border: 1px solid color-mix(in srgb, var(--chat-gold) 72%, white); box-shadow: 0 0 0 7px rgba(41,105,205,.055), 0 0 0 8px rgba(193,156,109,.15), 0 10px 28px rgba(32,58,99,.14); }
-.empty-avatar img { position: absolute; width: 144px; height: 144px; max-width: none; left: -38px; top: -7px; }
+.empty-avatar img { position: absolute; width: 126px; height: 126px; max-width: none; left: -28px; top: -10px; }
 .empty-chat h2 { margin: 0; color: #293665; font-size: 20px; line-height: 1.3; letter-spacing: -.02em; }
 .empty-chat h2::after { content: ""; display: block; width: 42px; height: 2px; margin: 10px auto 0; border-radius: 999px; background: linear-gradient(90deg, transparent, var(--chat-gold), transparent); }
 .empty-chat > p { max-width: 310px; margin: 9px 0 20px; color: var(--chat-muted); font-size: 13px; line-height: 1.6; }
@@ -218,7 +229,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .assistant-turn { max-width: 100%; }
 .speaker-label { height: 24px; display: flex; align-items: center; gap: 7px; margin-bottom: 6px; color: #425a86; font-size: 11px; font-weight: 700; }
 .speaker-avatar { width: 23px; height: 23px; border: 1px solid color-mix(in srgb, var(--chat-gold) 58%, white); }
-.speaker-avatar img { position: absolute; width: 49px; height: 49px; max-width: none; left: -13px; top: -3px; }
+.speaker-avatar img { position: absolute; width: 41px; height: 41px; max-width: none; left: -9px; top: -3px; }
 .message-assistant { color: var(--chat-text); font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
 .message-assistant > :first-child { margin-top: 0; }
 .message-assistant > :last-child { margin-bottom: 0; }
@@ -329,7 +340,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .settings-header { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 22px 28px 19px; border-bottom: 1px solid color-mix(in srgb, var(--ui-gold) 30%, var(--ui-border)); background: linear-gradient(112deg, rgba(255,253,248,.96), rgba(239,246,255,.95) 72%, rgba(241,224,187,.38)); box-shadow: 0 8px 24px rgba(32,58,99,.055); backdrop-filter: blur(18px); }
 .settings-brand { min-width: 0; display: flex; align-items: center; gap: 14px; }
 .settings-avatar { position: relative; width: 54px; height: 54px; flex: 0 0 54px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--ui-gold) 68%, white); border-radius: 18px; background: #edf4fd; box-shadow: 0 0 0 4px rgba(41,105,205,.055), 0 8px 20px rgba(32,58,99,.12); }
-.settings-avatar img { position: absolute; width: 112px; height: 112px; max-width: none; left: -30px; top: -6px; }
+.settings-avatar img { position: absolute; width: 97px; height: 97px; max-width: none; left: -22px; top: -8px; }
 .settings-header .eyebrow { margin: 0 0 6px; color: var(--ui-blue-strong); font-size: 10px; font-weight: 750; letter-spacing: .13em; }
 .settings-header h1 { margin: 0; color: #293665; font-size: 25px; line-height: 1.1; letter-spacing: -.025em; }
 .settings-header h1:focus { outline: none; }

@@ -57,18 +57,6 @@ export function parseCommand(line) {
           || Buffer.byteLength(value.file.content) > 20_000) throw new Error("invalid attached file");
       file = { name: value.file.name, content: value.file.content };
     }
-    let location = null;
-    if (value.location !== undefined && value.location !== null) {
-      const loc = value.location;
-      if (!loc || typeof loc !== "object" || Array.isArray(loc)
-          || typeof loc.latitude !== "number" || !Number.isFinite(loc.latitude) || Math.abs(loc.latitude) > 90
-          || typeof loc.longitude !== "number" || !Number.isFinite(loc.longitude) || Math.abs(loc.longitude) > 180
-          || typeof loc.capturedAt !== "string" || !Number.isFinite(Date.parse(loc.capturedAt))
-          || typeof loc.accuracyMeters !== "number" || !Number.isFinite(loc.accuracyMeters)
-          || loc.accuracyMeters < 0 || loc.accuracyMeters > 100_000) throw new Error("invalid attached location");
-      location = { latitude: loc.latitude, longitude: loc.longitude,
-        capturedAt: loc.capturedAt, accuracyMeters: loc.accuracyMeters };
-    }
     let tools = null;
     if (value.tools !== undefined && value.tools !== null) {
       if (!Array.isArray(value.tools) || value.tools.length > 64)
@@ -95,7 +83,7 @@ export function parseCommand(line) {
         return { grantId: grant.grantId, label: grant.label, read: grant.read, write: grant.write };
       });
     }
-    const command = { type: "prompt", runId: value.runId, text: value.text, interactionMode, memories: checked, file, location };
+    const command = { type: "prompt", runId: value.runId, text: value.text, interactionMode, memories: checked, file };
     if (tools) command.tools = tools;
     if (folderGrants) command.folderGrants = folderGrants;
     return command;

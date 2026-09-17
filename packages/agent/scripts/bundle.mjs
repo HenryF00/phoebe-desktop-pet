@@ -28,6 +28,7 @@ mkdirSync(resourceDir, { recursive: true });
 const extension = process.platform === "win32" ? ".exe" : "";
 const binary = resolve(binaryDir, `phoebe-agent-node-${targetTriple}${extension}`);
 const script = resolve(resourceDir, "phoebe-agent.cjs");
+const browserScript = resolve(resourceDir, "phoebe-browser.cjs");
 const nodeLicense = [
   resolve(dirname(process.execPath), "LICENSE"),
   resolve(dirname(dirname(process.execPath)), "LICENSE"),
@@ -42,6 +43,32 @@ await build({
   format: "cjs",
   target: "node22",
   logLevel: "warning",
+});
+const browserBanner = `// Patch require.resolve so playwright-core can locate its own package.json
+// inside the single-file bundle. The browser registry is never used (the
+// executablePath is passed explicitly), so a synthetic package.json suffices.
+const __phoebeFs = require("node:fs");
+const __phoebeOs = require("node:os");
+const __phoebePath = require("node:path");
+const __phoebeModule = require("node:module");
+const __phoebePkg = __phoebePath.join(__phoebeOs.tmpdir(), "phoebe-playwright-package.json");
+if (!__phoebeFs.existsSync(__phoebePkg)) {
+  __phoebeFs.writeFileSync(__phoebePkg, JSON.stringify({ name: "playwright-core", version: "1.54.1" }));
+}
+const __phoebeResolve = __phoebeModule._resolveFilename;
+__phoebeModule._resolveFilename = function (request, parent, isMain, options) {
+  if (request === "../../../package.json") return __phoebePkg;
+  return __phoebeResolve.call(this, request, parent, isMain, options);
+};`;
+await build({
+  entryPoints: [resolve(root, "packages/agent/src/browser-sidecar.mjs")],
+  outfile: browserScript,
+  bundle: true,
+  platform: "node",
+  format: "cjs",
+  target: "node22",
+  logLevel: "warning",
+  banner: { js: browserBanner },
 });
 copyFileSync(process.execPath, binary);
 if (process.platform !== "win32") chmodSync(binary, 0o755);

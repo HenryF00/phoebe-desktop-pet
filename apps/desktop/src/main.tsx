@@ -85,7 +85,6 @@ const PlusIcon = () => <Icon><path d="M12 5v14M5 12h14" /></Icon>;
 const SendIcon = () => <Icon><path d="m5 12 14-7-4 14-3-6-7-1Z" /><path d="m12 13 7-8" /></Icon>;
 const StopIcon = () => <Icon><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none" /></Icon>;
 const FileIcon = () => <Icon><path d="M7 3h7l4 4v14H7z" /><path d="M14 3v5h5M10 13h5M10 17h5" /></Icon>;
-const LocationIcon = () => <Icon><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z" /><circle cx="12" cy="10" r="2.4" /></Icon>;
 const InfoIcon = () => <Icon><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7.5h.01" /></Icon>;
 const FolderIcon = () => <Icon><path d="M3 6h6l2 2h10v10H3z" /></Icon>;
 const ChevronDownIcon = () => <Icon><path d="m7 10 5 5 5-5" /></Icon>;
@@ -107,7 +106,7 @@ const toolLabels: Record<string, string> = {
   get_system_status: "检查系统状态",
   web_search: "搜索网页",
   read_selected_file: "读取所选文件",
-  get_device_location: "使用本轮位置",
+  get_device_location: "获取设备位置",
   list_granted_folders: "查看授权文件夹",
   list_directory: "列出目录",
   read_text_file: "读取文本文件",
@@ -122,6 +121,14 @@ const toolLabels: Record<string, string> = {
   launch_application: "启动应用",
   open_url: "打开链接",
   focus_application: "切换应用",
+  browser_open: "打开受控浏览器",
+  browser_snapshot: "浏览器页面快照",
+  browser_click: "点击页面元素",
+  browser_type: "向页面输入",
+  browser_select: "选择下拉项",
+  browser_wait: "等待页面加载",
+  browser_extract_text: "提取页面文本",
+  browser_close: "关闭受控浏览器",
   remember_preference: "保存偏好",
   forget_preference: "移除偏好",
 };
@@ -455,9 +462,9 @@ function SettingsApp() {
 
 function ChatApp() {
   const [status, setStatus] = React.useState<SystemStatus | null>(null);
+  const [interactionMode, setInteractionMode] = React.useState<InteractionMode>("assistant");
   const [attachmentBusy, setAttachmentBusy] = React.useState(false);
   const [attachedFile, setAttachedFile] = React.useState("");
-  const [attachedLocation, setAttachedLocation] = React.useState("");
   const [attachmentNotice, setAttachmentNotice] = React.useState("");
   const [listenerReady, setListenerReady] = React.useState(false);
   const [draft, setDraft] = React.useState("");
@@ -506,19 +513,31 @@ function ChatApp() {
     let unlistenHistory: (() => void) | null = null;
     let unlistenVoice: (() => void) | null = null;
     let unlistenApproval: (() => void) | null = null;
-    void invoke<Conversation[]>("list_conversations").then(list => {
-      if (!disposed) setConversations(list);
+    let unlistenPrefs: (() => void) | null = null;
+    void invoke<DesktopSettings>("get_settings").then(settings => {
+      if (!disposed) setInteractionMode(settings.interaction_mode);
     }).catch(() => {});
-    void invoke<ActiveConversation>("get_active_conversation").then(active => {
+    function reloadConversation() {
+      void invoke<Conversation[]>("list_conversations").then(list => {
+        if (!disposed) setConversations(list);
+      }).catch(() => {});
+      void invoke<ActiveConversation>("get_active_conversation").then(active => {
+        if (disposed) return;
+        setActiveConversationId(active.conversation.id);
+        setSavedHistoryCount(active.turns.length);
+        setMessages(active.turns.map(turn => ({
+          runId: turn.runId, question: turn.question, answer: turn.answer,
+          phase: "completed" as const, fromHistory: true,
+        })));
+        setHistoryLoading(false);
+      }).catch(() => { if (!disposed) { setHistoryNotice("本机历史暂不可读取；请检查应用数据目录。对话仍可继续。"); setHistoryLoading(false); } });
+    }
+    reloadConversation();
+    void listen<QuickPreferences>("quick-preferences-changed", event => {
       if (disposed) return;
-      setActiveConversationId(active.conversation.id);
-      setSavedHistoryCount(active.turns.length);
-      setMessages(active.turns.map(turn => ({
-        runId: turn.runId, question: turn.question, answer: turn.answer,
-        phase: "completed" as const, fromHistory: true,
-      })));
-      setHistoryLoading(false);
-    }).catch(() => { if (!disposed) { setHistoryNotice("本机历史暂不可读取；请检查应用数据目录。对话仍可继续。"); setHistoryLoading(false); } });
+      setInteractionMode(event.payload.interaction_mode);
+      reloadConversation();
+    }).then(fn => { if (disposed) fn(); else unlistenPrefs = fn; });
     void listen<HistoryOutcome>("history-event", event => {
       const outcome = event.payload;
       if (outcome.status === "saved") {
@@ -583,7 +602,7 @@ function ChatApp() {
     void listen<ApprovalRequest>("approval-required", event => {
       if (!disposed) { setApproval(event.payload); setAssistantState("awaiting_approval"); }
     }).then(fn => { if (disposed) fn(); else unlistenApproval = fn; });
-    return () => { disposed = true; unlisten?.(); unlistenHistory?.(); unlistenKey?.(); unlistenVoice?.(); unlistenApproval?.(); setListenerReady(false); };
+    return () => { disposed = true; unlisten?.(); unlistenHistory?.(); unlistenKey?.(); unlistenVoice?.(); unlistenApproval?.(); unlistenPrefs?.(); setListenerReady(false); };
   }, []);
 
   React.useEffect(() => {
@@ -655,7 +674,7 @@ function ChatApp() {
   }, [privacyOpen]);
 
   const agentReady = status?.agent === "ready" && listenerReady;
-  const agentNotice = agentReady ? "文字对话已就绪。可联网搜索；文件和位置需你主动附加到本轮对话。"
+  const agentNotice = agentReady ? "文字对话已就绪。可联网搜索；文件需你主动附加到本轮对话，位置由系统原生定位按需获取。"
     : !inTauri ? "浏览器只显示界面预览；请启动桌面应用以连接 Agent。"
     : status?.agent === "failed" ? "系统安全存储暂不可用；请检查桌面环境。"
     : status?.agent === "ready" ? "Agent 事件连接未就绪；发送消息暂不可用。"
@@ -675,36 +694,10 @@ function ChatApp() {
     finally { setAttachmentBusy(false); }
   }
 
-  async function locateOnce() {
-    if (!inTauri || attachmentBusy || activeRunId) return;
-    setToolMenuOpen(false);
-    if (!navigator.geolocation) { setAttachmentNotice("当前桌面 WebView 不支持系统定位；暂不能提供位置工具结果。"); return; }
-    setAttachmentBusy(true); setAttachmentNotice("正在请求一次设备定位；可在系统弹窗中拒绝。");
-    try {
-      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject,
-          { enableHighAccuracy: false, maximumAge: 0, timeout: 12_000 });
-      });
-      const summary = await invoke<string>("attach_device_location", {
-        latitude: position.coords.latitude, longitude: position.coords.longitude,
-        accuracyMeters: position.coords.accuracy,
-      });
-      setAttachedLocation(summary);
-      setAttachmentNotice("粗略位置已附加到下一轮对话；只有调用位置工具时，坐标才会交给 DeepSeek。不会持续跟踪。");
-    } catch (error) {
-      const code = typeof error === "object" && error !== null && "code" in error ? Number(error.code) : 0;
-      setAttachmentNotice(code === 1 ? "系统或桌面 WebView 拒绝定位；请检查 macOS 定位服务和本应用权限。"
-        : code === 2 ? "系统暂时无法取得位置；请确认定位服务可用。"
-        : code === 3 ? "设备定位超时；请稍后重试。"
-        : "当前构建无法取得系统定位；请稍后重试。");
-    }
-    finally { setAttachmentBusy(false); }
-  }
-
   async function clearAttachments() {
     if (!inTauri || activeRunId) return;
     try { await invoke("clear_agent_attachments");
-      setAttachedFile(""); setAttachedLocation(""); setAttachmentNotice("已移除本轮附加的文件与位置。");
+      setAttachedFile(""); setAttachmentNotice("已移除本轮附加的文件。");
     } catch { setAttachmentNotice("移除附加内容失败，请重试。"); }
   }
 
@@ -845,7 +838,7 @@ function ChatApp() {
     setActiveRunId(runId);
     setAssistantState("thinking");
     setDraft("");
-    try { await invoke("prompt_agent", { runId, text }); setAttachedFile(""); setAttachedLocation(""); setAttachmentNotice(""); }
+    try { await invoke("prompt_agent", { runId, text }); setAttachedFile(""); setAttachmentNotice(""); }
     catch {
       setMessages(current => current.map(entry => entry.runId === runId
         ? { ...entry, phase: "failed", error: "无法开始对话；请检查 Agent 配置后重试。" } : entry));
@@ -885,7 +878,7 @@ function ChatApp() {
 
   async function closeChat() {
     if (!inTauri) { location.search = "?view=pet"; return; }
-    try { await invoke("clear_agent_attachments"); setAttachedFile(""); setAttachedLocation(""); await invoke("hide_chat"); }
+    try { await invoke("clear_agent_attachments"); setAttachedFile(""); await invoke("hide_chat"); }
     catch { setDraftError("无法收起聊天窗；请从托盘恢复或重启桌面应用。"); }
   }
 
@@ -908,7 +901,7 @@ function ChatApp() {
     requestAnimationFrame(() => inputRef.current?.focus());
   }
 
-  return <main className="chat-shell" onKeyDown={event => {
+  return <main className={`chat-shell${interactionMode === "chat" ? " is-chat" : " is-assistant"}`} onKeyDown={event => {
     if (event.key !== "Escape") return;
     if (approval) { event.preventDefault(); event.stopPropagation(); void resolveApproval("deny"); return; }
     if (headerMenuOpen || toolMenuOpen || privacyOpen) {
@@ -918,7 +911,7 @@ function ChatApp() {
     <section className="chat-card" aria-label="菲比聊天面板">
       <header className="chat-header">
         <span className="chat-avatar"><img src="/pet/phoebe-orb-avatar-v1.png" alt="" /></span>
-        <div className="chat-identity"><h1>菲比</h1><p><span className={`status-dot ${agentReady ? "is-ready" : ""}`} />{agentStatusLabel}</p></div>
+        <div className="chat-identity"><h1>菲比 <span className={`mode-badge${interactionMode === "chat" ? " is-chat" : ""}`}>{interactionMode === "chat" ? "聊天" : "助手"}</span></h1><p><span className={`status-dot ${agentReady ? "is-ready" : ""}`} />{agentStatusLabel}</p></div>
         <div className="chat-header-actions">
           <button className="icon-button" type="button" onClick={() => { setHeaderMenuOpen(value => !value); setToolMenuOpen(false); setPrivacyOpen(false); }} aria-label="更多聊天选项" aria-expanded={headerMenuOpen}><MoreIcon /></button>
           {headerMenuOpen && <div className="chat-popover header-menu">
@@ -969,12 +962,18 @@ function ChatApp() {
       <div ref={bodyRef} className="chat-body" onScroll={handleBodyScroll}>
         {messages.length === 0 && <div className="empty-chat">
           <div className="empty-avatar"><img src="/pet/phoebe-orb-avatar-v1.png" alt="" /></div>
-          <h2>今天想一起做什么？</h2>
-          <p>{agentReady ? "我可以聊天、联网搜索，也能在你授权后读取文本文件或使用一次位置。" : agentNotice}</p>
+          <h2>{interactionMode === "chat" ? "想和我聊点什么？" : "今天想一起做什么？"}</h2>
+          <p>{agentReady ? (interactionMode === "chat" ? "我在聊天模式：回答会更简短、更亲近，并完整朗读。" : "我可以聊天、联网搜索，也能在你授权后读取文本文件或获取一次设备位置。") : agentNotice}</p>
           {agentReady && <div className="suggestion-list" aria-label="建议问题">
-            <button type="button" onClick={() => useSuggestion("根据我的位置查询今天的天气")}>查询今天的天气</button>
-            <button type="button" onClick={() => useSuggestion("搜索今天值得关注的科技新闻，并给出来源")}>搜索今日科技新闻</button>
-            <button type="button" onClick={() => { setToolMenuOpen(true); requestAnimationFrame(() => inputRef.current?.focus()); }}>读取一个文本文件</button>
+            {interactionMode === "chat" ? <>
+              <button type="button" onClick={() => useSuggestion("随便聊聊，今天过得怎么样？")}>随便聊聊今天</button>
+              <button type="button" onClick={() => useSuggestion("给我讲个轻松的小故事")}>讲个轻松的小故事</button>
+              <button type="button" onClick={() => useSuggestion("用一句话夸夸我")}>用一句话夸夸我</button>
+            </> : <>
+              <button type="button" onClick={() => useSuggestion("根据我的位置查询今天的天气")}>查询今天的天气</button>
+              <button type="button" onClick={() => useSuggestion("搜索今天值得关注的科技新闻，并给出来源")}>搜索今日科技新闻</button>
+              <button type="button" onClick={() => { setToolMenuOpen(true); requestAnimationFrame(() => inputRef.current?.focus()); }}>读取一个文本文件</button>
+            </>}
           </div>}
         </div>}
 
@@ -1014,19 +1013,17 @@ function ChatApp() {
           <span>{voiceEvent.message}</span>
           {(voiceEvent.state === "synthesizing" || voiceEvent.state === "speaking") && <button type="button" onClick={() => void stopVoice()}>停止语音</button>}
         </div>}
-        {(attachedFile || attachedLocation) && <div className="attachment-chips" aria-label="本轮已附加内容">
-          {attachedFile && <span><FileIcon />{attachedFile}</span>}
-          {attachedLocation && <span><LocationIcon />{attachedLocation}</span>}
+        {attachedFile && <div className="attachment-chips" aria-label="本轮已附加内容">
+          <span><FileIcon />{attachedFile}</span>
           <button type="button" onClick={() => void clearAttachments()} disabled={Boolean(activeRunId)} aria-label="移除本轮附加内容"><CloseIcon /></button>
         </div>}
         {attachmentNotice && <p className="composer-notice" role="status" aria-live="polite">{attachmentNotice}</p>}
         {!agentReady && <p className="composer-notice is-warning">{agentNotice}</p>}
         <div className="composer">
           <div className="composer-menu-anchor">
-            <button className="composer-icon-button" type="button" onClick={() => { setToolMenuOpen(value => !value); setHeaderMenuOpen(false); setPrivacyOpen(false); }} disabled={!inTauri || attachmentBusy || Boolean(activeRunId)} aria-label="添加文件或位置" aria-expanded={toolMenuOpen}><PlusIcon /></button>
+            <button className="composer-icon-button" type="button" onClick={() => { setToolMenuOpen(value => !value); setHeaderMenuOpen(false); setPrivacyOpen(false); }} disabled={!inTauri || attachmentBusy || Boolean(activeRunId)} aria-label="添加文件或授权文件夹" aria-expanded={toolMenuOpen}><PlusIcon /></button>
             {toolMenuOpen && <div className="chat-popover tool-menu">
               <button type="button" onClick={() => void chooseFile()}><FileIcon /><span><strong>选择文本文件</strong><small>仅授权本轮读取</small></span></button>
-              <button type="button" onClick={() => void locateOnce()}><LocationIcon /><span><strong>使用当前位置</strong><small>单次获取，不持续跟踪</small></span></button>
               <button type="button" onClick={() => void chooseFolder(false)} disabled={grantBusy}><FolderIcon /><span><strong>授权文件夹（只读）</strong><small>{grantBusy ? "正在选择…" : grants.length ? `已授权 ${grants.length} 个` : "可随时撤销"}</small></span></button>
               <button type="button" onClick={() => void chooseFolder(true)} disabled={grantBusy}><FolderIcon /><span><strong>授权文件夹（可读写）</strong><small>写入与删除仍需逐次确认</small></span></button>
             </div>}
@@ -1046,7 +1043,7 @@ function ChatApp() {
                 <button ref={privacyCloseRef} className="privacy-close" type="button" aria-label="关闭工具与隐私说明"
                   onClick={() => { privacyRestoreFocusRef.current = true; setPrivacyOpen(false); }}><CloseIcon /></button>
               </div>
-              <p>搜索词会发送给搜索服务；文件和粗略位置仅在你主动附加并调用工具时发送给 DeepSeek，本轮结束后即从 Agent 上下文清除。</p>
+              <p>搜索词会发送给搜索服务；文件仅在你主动附加并调用工具时发送给 DeepSeek，本轮结束后即从 Agent 上下文清除。位置由系统原生定位一次性获取，仅在你请求时读取。</p>
             </div>}
           </div>
           {activeRunId ? <button type="button" className="composer-action is-stop" onClick={stopMessage} aria-label="停止生成"><StopIcon /></button>

@@ -18,6 +18,7 @@
     "externalBin": ["binaries/phoebe-agent-node"],
     "resources": {
       "resources/phoebe-agent.cjs": "phoebe-agent.cjs",
+      "resources/phoebe-browser.cjs": "phoebe-browser.cjs",
       "resources/NODE-LICENSE": "NODE-LICENSE",
       "resources/voice-runtime/manifest.json": "voice-runtime/manifest.json",
       "resources/voice-runtime/python-env.tar.gz": "voice-runtime/python-env.tar.gz",

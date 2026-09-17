@@ -25,6 +25,48 @@ struct OpenUrlArgs {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BrowserOpenArgs {
+    url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BrowserRefArgs {
+    #[serde(rename = "ref")]
+    ref_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BrowserTypeArgs {
+    #[serde(rename = "ref")]
+    ref_id: String,
+    text: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BrowserSelectArgs {
+    #[serde(rename = "ref")]
+    ref_id: String,
+    value: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RememberPreferenceArgs {
+    title: String,
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ForgetPreferenceArgs {
+    title: String,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ListDirectoryArgs {
     grant_id: String,
@@ -119,6 +161,17 @@ pub enum Parsed {
     FocusApplication { app_id: String },
     RevealFile { grant_id: String, relative_path: String },
     OpenFileWithApplication { grant_id: String, relative_path: String, app_id: String },
+    BrowserOpen { url: String, host: String },
+    BrowserSnapshot,
+    BrowserClick { ref_id: String },
+    BrowserType { ref_id: String, text: String },
+    BrowserSelect { ref_id: String, value: String },
+    BrowserWait,
+    BrowserExtractText,
+    BrowserClose,
+    RememberPreference { title: String, content: String },
+    ForgetPreference { title: String },
+    LaunchWutheringWaves,
 }
 
 /// Description shown to the human in the approval dialog. Never sent to the model.
@@ -139,6 +192,7 @@ pub struct GrantRequirement {
 pub enum Tool {
     GetCurrentTime,
     GetSystemStatus,
+    GetDeviceLocation,
     OpenUrl,
     ListGrantedFolders,
     ListDirectory,
@@ -152,6 +206,17 @@ pub enum Tool {
     FocusApplication,
     RevealFile,
     OpenFileWithApplication,
+    BrowserOpen,
+    BrowserSnapshot,
+    BrowserClick,
+    BrowserType,
+    BrowserSelect,
+    BrowserWait,
+    BrowserExtractText,
+    BrowserClose,
+    RememberPreference,
+    ForgetPreference,
+    LaunchWutheringWaves,
 }
 
 const MAX_READ_BYTES: u64 = 32 * 1024;
@@ -171,6 +236,7 @@ impl Tool {
         match name {
             "get_current_time" => Some(Self::GetCurrentTime),
             "get_system_status" => Some(Self::GetSystemStatus),
+            "get_device_location" => Some(Self::GetDeviceLocation),
             "open_url" => Some(Self::OpenUrl),
             "list_granted_folders" => Some(Self::ListGrantedFolders),
             "list_directory" => Some(Self::ListDirectory),
@@ -184,6 +250,17 @@ impl Tool {
             "focus_application" => Some(Self::FocusApplication),
             "reveal_file" => Some(Self::RevealFile),
             "open_file_with_application" => Some(Self::OpenFileWithApplication),
+            "browser_open" => Some(Self::BrowserOpen),
+            "browser_snapshot" => Some(Self::BrowserSnapshot),
+            "browser_click" => Some(Self::BrowserClick),
+            "browser_type" => Some(Self::BrowserType),
+            "browser_select" => Some(Self::BrowserSelect),
+            "browser_wait" => Some(Self::BrowserWait),
+            "browser_extract_text" => Some(Self::BrowserExtractText),
+            "browser_close" => Some(Self::BrowserClose),
+            "remember_preference" => Some(Self::RememberPreference),
+            "forget_preference" => Some(Self::ForgetPreference),
+            "launch_wuthering_waves" => Some(Self::LaunchWutheringWaves),
             _ => None,
         }
     }
@@ -192,6 +269,7 @@ impl Tool {
         match self {
             Self::GetCurrentTime => "get_current_time",
             Self::GetSystemStatus => "get_system_status",
+            Self::GetDeviceLocation => "get_device_location",
             Self::OpenUrl => "open_url",
             Self::ListGrantedFolders => "list_granted_folders",
             Self::ListDirectory => "list_directory",
@@ -205,28 +283,56 @@ impl Tool {
             Self::FocusApplication => "focus_application",
             Self::RevealFile => "reveal_file",
             Self::OpenFileWithApplication => "open_file_with_application",
+            Self::BrowserOpen => "browser_open",
+            Self::BrowserSnapshot => "browser_snapshot",
+            Self::BrowserClick => "browser_click",
+            Self::BrowserType => "browser_type",
+            Self::BrowserSelect => "browser_select",
+            Self::BrowserWait => "browser_wait",
+            Self::BrowserExtractText => "browser_extract_text",
+            Self::BrowserClose => "browser_close",
+            Self::RememberPreference => "remember_preference",
+            Self::ForgetPreference => "forget_preference",
+            Self::LaunchWutheringWaves => "launch_wuthering_waves",
         }
     }
 
     /// Auto tools never require approval and are safe in every action mode.
+    /// Browser actions after `browser_open` are auto: the page itself was
+    /// already approved when it was opened.
     pub fn is_auto(&self) -> bool {
         matches!(
             self,
             Self::GetCurrentTime
                 | Self::GetSystemStatus
+                | Self::GetDeviceLocation
                 | Self::ListGrantedFolders
                 | Self::ListInstalledApps
+                | Self::BrowserSnapshot
+                | Self::BrowserClick
+                | Self::BrowserType
+                | Self::BrowserSelect
+                | Self::BrowserWait
+                | Self::BrowserExtractText
+                | Self::BrowserClose
         )
     }
 
     /// Tools that must be confirmed on every call, even in trust mode.
     pub fn always_confirms(&self) -> bool {
-        matches!(self, Self::WriteFile | Self::MoveFile | Self::DeleteFile)
+        matches!(
+            self,
+            Self::WriteFile
+                | Self::MoveFile
+                | Self::DeleteFile
+                | Self::RememberPreference
+                | Self::ForgetPreference
+        )
     }
 
     pub fn parse(&self, args: &serde_json::Value) -> Result<Parsed, String> {
         match self {
-            Self::GetCurrentTime | Self::GetSystemStatus => {
+            Self::GetCurrentTime | Self::GetSystemStatus | Self::GetDeviceLocation => {
                 serde_json::from_value::<EmptyArgs>(args.clone())
                     .map_err(|_| "参数包含未允许的字段".to_owned())?;
                 Ok(Parsed::Empty)
@@ -236,6 +342,73 @@ impl Tool {
                     .map_err(|_| "参数包含未允许的字段".to_owned())?;
                 let (url, host) = validate_https_url(&parsed.url)?;
                 Ok(Parsed::OpenUrl { url, host })
+            }
+            Self::BrowserOpen => {
+                let parsed: BrowserOpenArgs = serde_json::from_value(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                let (url, host) = validate_https_url(&parsed.url)?;
+                Ok(Parsed::BrowserOpen { url, host })
+            }
+            Self::BrowserSnapshot | Self::BrowserWait | Self::BrowserExtractText
+            | Self::BrowserClose => {
+                serde_json::from_value::<EmptyArgs>(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                match self {
+                    Self::BrowserSnapshot => Ok(Parsed::BrowserSnapshot),
+                    Self::BrowserWait => Ok(Parsed::BrowserWait),
+                    Self::BrowserExtractText => Ok(Parsed::BrowserExtractText),
+                    _ => Ok(Parsed::BrowserClose),
+                }
+            }
+            Self::BrowserClick => {
+                let parsed: BrowserRefArgs = serde_json::from_value(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                Ok(Parsed::BrowserClick { ref_id: validate_browser_ref(&parsed.ref_id)? })
+            }
+            Self::BrowserType => {
+                let parsed: BrowserTypeArgs = serde_json::from_value(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                if parsed.text.len() > 2000 {
+                    return Err("输入文本过长".to_owned());
+                }
+                Ok(Parsed::BrowserType {
+                    ref_id: validate_browser_ref(&parsed.ref_id)?,
+                    text: parsed.text,
+                })
+            }
+            Self::BrowserSelect => {
+                let parsed: BrowserSelectArgs = serde_json::from_value(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                if parsed.value.len() > 200 {
+                    return Err("选项值过长".to_owned());
+                }
+                Ok(Parsed::BrowserSelect {
+                    ref_id: validate_browser_ref(&parsed.ref_id)?,
+                    value: parsed.value,
+                })
+            }
+            Self::RememberPreference => {
+                let parsed: RememberPreferenceArgs = serde_json::from_value(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                crate::history::validate_memory(&parsed.title, &parsed.content)?;
+                Ok(Parsed::RememberPreference {
+                    title: parsed.title.trim().to_owned(),
+                    content: parsed.content.trim().to_owned(),
+                })
+            }
+            Self::ForgetPreference => {
+                let parsed: ForgetPreferenceArgs = serde_json::from_value(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                let title = parsed.title.trim().to_owned();
+                if title.is_empty() || title.chars().any(char::is_control) {
+                    return Err("记忆标题无效".to_owned());
+                }
+                Ok(Parsed::ForgetPreference { title })
+            }
+            Self::LaunchWutheringWaves => {
+                serde_json::from_value::<EmptyArgs>(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                Ok(Parsed::LaunchWutheringWaves)
             }
             Self::ListGrantedFolders => {
                 serde_json::from_value::<EmptyArgs>(args.clone())
@@ -356,7 +529,9 @@ impl Tool {
     /// Persistent trust key used by "always allow" grants, when supported.
     pub fn bound_key(&self, parsed: &Parsed) -> Option<String> {
         match parsed {
-            Parsed::OpenUrl { host, .. } => Some(format!("domain:{host}")),
+            Parsed::OpenUrl { host, .. } | Parsed::BrowserOpen { host, .. } => {
+                Some(format!("domain:{host}"))
+            }
             Parsed::ListDirectory { grant_id, .. }
             | Parsed::ReadTextFile { grant_id, .. }
             | Parsed::SearchFiles { grant_id, .. }
@@ -368,6 +543,7 @@ impl Tool {
             Parsed::LaunchApplication { app_id } | Parsed::FocusApplication { app_id } => {
                 Some(format!("app:{app_id}"))
             }
+            Parsed::LaunchWutheringWaves => Some("app:wuthering-waves".to_owned()),
             _ => None,
         }
     }
@@ -414,8 +590,49 @@ impl Tool {
                 impact: format!("用系统默认浏览器打开 {url}"),
                 preview: None,
             }),
+            (Self::BrowserOpen, Parsed::BrowserOpen { url, host }) => Ok(Describe {
+                target: host.clone(),
+                impact: format!("在受控浏览器中打开 {url}（无头模式，独立配置，不触碰你的登录会话）"),
+                preview: None,
+            }),
+            (Self::BrowserSnapshot, _) => read_only_describe("受控浏览器页面快照"),
+            (Self::BrowserClick, _) => read_only_describe("点击页面元素"),
+            (Self::BrowserType, _) => read_only_describe("向页面输入文本"),
+            (Self::BrowserSelect, _) => read_only_describe("选择下拉选项"),
+            (Self::BrowserWait, _) => read_only_describe("等待页面加载"),
+            (Self::BrowserExtractText, _) => read_only_describe("提取页面文本"),
+            (Self::BrowserClose, _) => read_only_describe("关闭受控浏览器"),
+            (Self::RememberPreference, Parsed::RememberPreference { title, content }) => {
+                Ok(Describe {
+                    target: format!("长期记忆：{title}"),
+                    impact: format!("记住：{content}\n（将用于后续对话）"),
+                    preview: None,
+                })
+            }
+            (Self::ForgetPreference, Parsed::ForgetPreference { title }) => {
+                let memory = ctx
+                    .app
+                    .state::<crate::history::HistoryStore>()
+                    .memory_by_title(title)?
+                    .ok_or("没有找到标题匹配的长期记忆；请先询问或列出记忆")?;
+                Ok(Describe {
+                    target: format!("长期记忆：{}", memory.title),
+                    impact: format!("删除：{}", memory.content),
+                    preview: None,
+                })
+            }
+            (Self::LaunchWutheringWaves, _) => {
+                let entry = super::apps::find_wuthering_waves()
+                    .ok_or("未找到鸣潮客户端；请确认已安装")?;
+                Ok(Describe {
+                    target: entry.name.clone(),
+                    impact: format!("启动游戏：{}（{}）", entry.name, entry.path),
+                    preview: None,
+                })
+            }
             (Self::GetCurrentTime, _) => read_only_describe("本机时间"),
             (Self::GetSystemStatus, _) => read_only_describe("应用状态"),
+            (Self::GetDeviceLocation, _) => read_only_describe("设备城市级位置"),
             (Self::ListGrantedFolders, _) => {
                 let labels: Vec<String> = ctx.grants.iter().map(|grant| grant.label.clone()).collect();
                 Ok(Describe {
@@ -555,6 +772,20 @@ impl Tool {
             (Self::GetSystemStatus, _) => Ok(ToolOutcome::success(
                 "桌面核心已运行；Agent 与语音状态请查看面板。".to_owned(),
             )),
+            (Self::GetDeviceLocation, _) => {
+                let location = super::location::current_location(ctx.app)?;
+                Ok(ToolOutcome::success(format!(
+                    "城市级粗略位置（约 0.1 度，非实时天气）：\n纬度 {}\n经度 {}\n精度约 {} 米\n获取时间 {}\n来源：操作系统原生定位，仅本次获取，不会持续跟踪。",
+                    location.latitude,
+                    location.longitude,
+                    if location.accuracy_meters >= 0.0 {
+                        format!("{:.0}", location.accuracy_meters)
+                    } else {
+                        "未知".to_owned()
+                    },
+                    location.captured_at
+                )))
+            }
             (Self::OpenUrl, Parsed::OpenUrl { url, .. }) => open_https(url),
             (Self::ListGrantedFolders, _) => Ok(ToolOutcome::success(
                 serde_json::to_string(&ctx.grants).unwrap_or_else(|_| "[]".to_owned()),
@@ -610,6 +841,38 @@ impl Tool {
             (Self::OpenFileWithApplication, Parsed::OpenFileWithApplication { relative_path, .. }) => {
                 open_file_with_application(ctx, relative_path)
             }
+            (Self::BrowserOpen, Parsed::BrowserOpen { url, .. }) => {
+                browser_request(ctx, serde_json::json!({ "type": "open", "url": url }))
+            }
+            (Self::BrowserSnapshot, _) => browser_request(ctx, serde_json::json!({ "type": "snapshot" })),
+            (Self::BrowserClick, Parsed::BrowserClick { ref_id }) => {
+                browser_request(ctx, serde_json::json!({ "type": "click", "ref": ref_id }))
+            }
+            (Self::BrowserType, Parsed::BrowserType { ref_id, text }) => {
+                browser_request(ctx, serde_json::json!({ "type": "type", "ref": ref_id, "text": text }))
+            }
+            (Self::BrowserSelect, Parsed::BrowserSelect { ref_id, value }) => {
+                browser_request(ctx, serde_json::json!({ "type": "select", "ref": ref_id, "value": value }))
+            }
+            (Self::BrowserWait, _) => browser_request(ctx, serde_json::json!({ "type": "wait" })),
+            (Self::BrowserExtractText, _) => browser_request(ctx, serde_json::json!({ "type": "extract_text" })),
+            (Self::BrowserClose, _) => browser_request(ctx, serde_json::json!({ "type": "close" })),
+            (Self::RememberPreference, Parsed::RememberPreference { title, content }) => {
+                let store = ctx.app.state::<crate::history::HistoryStore>();
+                store.remember_preference(title, content).map_err(|error| error)?;
+                Ok(ToolOutcome::success(format!("已记住：{title}")))
+            }
+            (Self::ForgetPreference, Parsed::ForgetPreference { title }) => {
+                let store = ctx.app.state::<crate::history::HistoryStore>();
+                store.forget_preference(title).map_err(|error| error)?;
+                Ok(ToolOutcome::success(format!("已移除记忆：{title}")))
+            }
+            (Self::LaunchWutheringWaves, _) => {
+                let entry = super::apps::find_wuthering_waves()
+                    .ok_or("未找到鸣潮客户端；请确认已安装")?;
+                spawn_open(&entry.path)?;
+                Ok(ToolOutcome::success(format!("已启动：{}", entry.name)))
+            }
             _ => Err("工具参数不匹配".to_owned()),
         }
     }
@@ -658,6 +921,35 @@ fn validate_app_id(value: &str) -> Result<String, String> {
         return Err("应用标识无效".to_owned());
     }
     Ok(value.to_owned())
+}
+
+fn validate_browser_ref(value: &str) -> Result<String, String> {
+    if value.len() > 16 || !value.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err("页面元素引用无效；请重新 snapshot 获取最新 ref".to_owned());
+    }
+    Ok(value.to_owned())
+}
+
+/// Forwards one command to the browser sidecar and turns the answer into a
+/// tool outcome. Structured details (like the DOM snapshot) are appended as
+/// JSON so the model can see element refs for click/type/select.
+fn browser_request(ctx: &ToolContext, command: serde_json::Value) -> Result<ToolOutcome, String> {
+    let result = ctx
+        .app
+        .state::<crate::browser::BrowserService>()
+        .request(ctx.app, command)?;
+    if !result.ok {
+        return Ok(ToolOutcome::failed(result.text));
+    }
+    let text = if result.details.is_null() {
+        result.text
+    } else {
+        match serde_json::to_string(&result.details) {
+            Ok(details) => format!("{}\n{}", result.text, details),
+            Err(_) => result.text,
+        }
+    };
+    Ok(ToolOutcome::success(text))
 }
 
 fn validate_relative(value: &str) -> Result<String, String> {
@@ -1214,6 +1506,72 @@ mod tests {
         assert!(Tool::from_name("bash").is_none());
         assert!(Tool::from_name("open_url").is_some());
         assert!(Tool::from_name("read_text_file").is_some());
+    }
+
+    #[test]
+    fn device_location_is_read_only_and_auto() {
+        let tool = Tool::from_name("get_device_location").unwrap();
+        assert_eq!(tool.name(), "get_device_location");
+        assert!(tool.is_auto());
+        assert!(matches!(tool.parse(&json!({})), Ok(Parsed::Empty)));
+        assert!(tool.parse(&json!({ "precise": true })).is_err());
+        assert!(tool.required_grant(&Parsed::Empty).is_none());
+        assert!(tool.bound_key(&Parsed::Empty).is_none());
+    }
+
+    #[test]
+    fn browser_tools_parse_and_scope_correctly() {
+        let open = Tool::from_name("browser_open").unwrap();
+        assert!(!open.is_auto());
+        assert!(Tool::BrowserOpen
+            .parse(&json!({ "url": "http://example.com" }))
+            .is_err());
+        let parsed = Tool::BrowserOpen.parse(&json!({ "url": "https://example.com/x" })).unwrap();
+        assert_eq!(
+            Tool::BrowserOpen.bound_key(&parsed).as_deref(),
+            Some("domain:example.com")
+        );
+
+        assert!(Tool::from_name("browser_snapshot").unwrap().is_auto());
+        assert!(Tool::BrowserSnapshot.parse(&json!({})).is_ok());
+        assert!(Tool::BrowserSnapshot.parse(&json!({ "url": "x" })).is_err());
+
+        assert!(Tool::BrowserClick
+            .parse(&json!({ "ref": "e0" }))
+            .is_ok());
+        assert!(Tool::BrowserClick
+            .parse(&json!({ "ref": "../evil" }))
+            .is_err());
+        assert!(Tool::BrowserType
+            .parse(&json!({ "ref": "e1", "text": "hi" }))
+            .is_ok());
+        assert!(Tool::BrowserType
+            .parse(&json!({ "ref": "e1", "text": "x".repeat(2001) }))
+            .is_err());
+        assert!(Tool::BrowserSelect
+            .parse(&json!({ "ref": "e2", "value": "opt" }))
+            .is_ok());
+    }
+
+    #[test]
+    fn preference_tools_validate_and_confirm() {
+        let remember = Tool::from_name("remember_preference").unwrap();
+        assert!(remember.always_confirms());
+        assert!(!remember.is_auto());
+        assert!(Tool::RememberPreference
+            .parse(&json!({ "title": "语言", "content": "默认使用简体中文" }))
+            .is_ok());
+        assert!(Tool::RememberPreference
+            .parse(&json!({ "title": "密码", "content": "123456" }))
+            .is_err());
+        assert!(Tool::RememberPreference
+            .parse(&json!({ "title": "偏好", "content": "my access token is abc" }))
+            .is_err());
+        assert!(Tool::RememberPreference
+            .parse(&json!({ "title": "x", "content": "y".repeat(601) }))
+            .is_err());
+        assert!(Tool::ForgetPreference.parse(&json!({ "title": "语言" })).is_ok());
+        assert!(Tool::ForgetPreference.parse(&json!({ "title": "  " })).is_err());
     }
 
     #[test]

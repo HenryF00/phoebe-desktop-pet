@@ -2413,11 +2413,14 @@ dependencies = [
 
 [[package]]
 name = "phoebe-desktop"
-version = "0.5.0"
+version = "0.8.0"
 dependencies = [
  "chrono",
  "flate2",
  "keyring",
+ "objc2",
+ "objc2-core-location",
+ "objc2-foundation",
  "reqwest 0.12.24",
  "rpassword",
  "rusqlite",
@@ -2430,6 +2433,7 @@ dependencies = [
  "tauri-plugin-autostart",
  "tauri-plugin-dialog",
  "url",
+ "windows",
 ]
 
 [[package]]

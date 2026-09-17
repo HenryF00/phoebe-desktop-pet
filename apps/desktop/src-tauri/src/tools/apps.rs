@@ -159,6 +159,16 @@ fn push(entries: &mut Vec<AppEntry>, seen: &mut BTreeSet<String>, path: String, 
     }
 }
 
+/// Finds the Wuthering Waves client by name, so the dedicated launch tool can
+/// target it without the model ever supplying a path. Returns `None` when the
+/// game is not installed.
+pub fn find_wuthering_waves() -> Option<AppEntry> {
+    scan().into_iter().find(|entry| {
+        let lower = entry.name.to_lowercase();
+        lower.contains("wuthering") || lower.contains("鸣潮") || lower.contains("明潮")
+    })
+}
+
 /// Deterministic across runs so trust grants survive a restart.
 fn hash(value: &str) -> u64 {
     use std::collections::hash_map::DefaultHasher;

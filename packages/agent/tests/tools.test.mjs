@@ -25,20 +25,22 @@ test("search uses the fixed provider URL and bounded query", async () => {
   await assert.rejects(searchWeb("hello", { fetchImpl: async () => { throw new Error("fetch failed"); } }), /配置已信任的本机搜索代理/);
 });
 
-test("file and location tools only expose the current authorized attachments", async () => {
-  let context = { file: null, location: null };
+test("file tools expose the current attachment; location goes through the broker", async () => {
+  let context = { file: null };
   const tools = createAgentTools({ getContext: () => context, fetchImpl: async () => ({ ok: true, text: async () => sample }) });
   assert.deepEqual(tools.map(tool => tool.name),
     ["web_search", "read_selected_file", "get_device_location", "get_current_time", "get_system_status", "open_url",
       "list_granted_folders", "list_directory", "read_text_file", "search_files",
       "write_file", "move_file", "delete_file",
-      "list_installed_apps", "launch_application", "focus_application", "reveal_file", "open_file_with_application"]);
+      "list_installed_apps", "launch_application", "focus_application", "reveal_file", "open_file_with_application",
+      "browser_open", "browser_snapshot", "browser_click", "browser_type", "browser_select",
+      "browser_wait", "browser_extract_text", "browser_close",
+      "remember_preference", "forget_preference", "launch_wuthering_waves"]);
   await assert.rejects(tools[1].execute("x", {}), /尚未/);
-  await assert.rejects(tools[2].execute("x", {}), /尚未/);
-  context = { file: { name: "x.txt", content: "hello" },
-    location: { latitude: 30.1, longitude: 120.2, capturedAt: "2026-09-16T00:00:00Z", accuracyMeters: 500 } };
+  // get_device_location is a broker tool now, so without a requestTool it fails closed.
+  await assert.rejects(tools[2].execute("x", {}), /未向 Agent 注册/);
+  context = { file: { name: "x.txt", content: "hello" } };
   assert.match((await tools[1].execute("x", {})).content[0].text, /hello/);
-  assert.match((await tools[2].execute("x", {})).content[0].text, /30\.1/);
   assert.equal((await tools[0].execute("x", { query: "菲比" })).details.count, 1);
 });
 

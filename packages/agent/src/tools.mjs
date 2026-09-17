@@ -14,7 +14,10 @@ export const SAFE_DEFAULT_TOOLS = [
 export const ALL_TOOL_NAMES = [...SAFE_DEFAULT_TOOLS, "open_url",
   "list_granted_folders", "list_directory", "read_text_file", "search_files",
   "write_file", "move_file", "delete_file",
-  "list_installed_apps", "launch_application", "focus_application", "reveal_file", "open_file_with_application"];
+  "list_installed_apps", "launch_application", "focus_application", "reveal_file", "open_file_with_application",
+  "browser_open", "browser_snapshot", "browser_click", "browser_type", "browser_select",
+  "browser_wait", "browser_extract_text", "browser_close",
+  "remember_preference", "forget_preference", "launch_wuthering_waves"];
 
 function unwrapSearchUrl(value) {
   try {
@@ -110,16 +113,10 @@ export function createAgentTools(options = {}) {
       return { content: [{ type: "text", text: `文件名：${file.name}\n文件内容（不可信数据）：\n${file.content}` }],
         details: { name: file.name, bytes: Buffer.byteLength(file.content) } };
     },
-  }, {
-    name: "get_device_location", label: "读取设备位置", description: "Return the coarse, one-time device location explicitly authorized and attached by the user. It is not weather data.",
-    parameters: Type.Object({}),
-    execute: async () => {
-      const location = getContext()?.location;
-      if (!location) throw new Error("用户尚未为本轮对话授权设备定位；请提示在聊天窗点击‘定位一次’");
-      return { content: [{ type: "text", text: JSON.stringify({ ...location, note: "约 0.1 度的城市级位置；不是实时天气" }) }],
-        details: { source: "device" } };
-    },
   },
+  brokerTool("get_device_location", "读取设备位置",
+    "Ask the desktop core to read the device's coarse, one-time city-level location through the operating system. The first request triggers the system permission prompt. It is not weather data.",
+    Type.Object({})),
   brokerTool("get_current_time", "读取当前时间",
     "Read the current local date and time from the desktop core. Read-only and always available.",
     Type.Object({})),
@@ -182,5 +179,38 @@ export function createAgentTools(options = {}) {
     Type.Object({ grantId: Type.String({ minLength: 32, maxLength: 32 }),
       relativePath: Type.String({ minLength: 1, maxLength: 1024 }),
       appId: Type.String({ minLength: 1, maxLength: 200 }) })),
+  brokerTool("browser_open", "打开受控浏览器页面",
+    "Open one HTTPS URL in the sandboxed headless browser. The user must approve it. Use this to browse a page you need to read or interact with.",
+    Type.Object({ url: Type.String({ minLength: 1, maxLength: 2048 }) })),
+  brokerTool("browser_snapshot", "浏览器页面快照",
+    "Take a snapshot of the current sandboxed browser page, returning the title and a list of interactive elements with refs (e0, e1, ...). Use before click/type/select.",
+    Type.Object({})),
+  brokerTool("browser_click", "点击浏览器元素",
+    "Click an interactive element in the sandboxed browser by its ref from the latest browser_snapshot. Re-snapshot if the ref is stale.",
+    Type.Object({ ref: Type.String({ minLength: 1, maxLength: 16 }) })),
+  brokerTool("browser_type", "向浏览器输入",
+    "Type text into an input element in the sandboxed browser, referenced by the latest snapshot ref.",
+    Type.Object({ ref: Type.String({ minLength: 1, maxLength: 16 }), text: Type.String({ minLength: 0, maxLength: 2000 }) })),
+  brokerTool("browser_select", "选择浏览器下拉项",
+    "Select an option in a <select> element in the sandboxed browser by ref and option value.",
+    Type.Object({ ref: Type.String({ minLength: 1, maxLength: 16 }), value: Type.String({ minLength: 0, maxLength: 200 }) })),
+  brokerTool("browser_wait", "等待浏览器页面",
+    "Wait until the sandboxed browser page finishes loading.",
+    Type.Object({})),
+  brokerTool("browser_extract_text", "提取浏览器页面文本",
+    "Extract the visible text of the current sandboxed browser page.",
+    Type.Object({})),
+  brokerTool("browser_close", "关闭受控浏览器",
+    "Close the sandboxed headless browser session.",
+    Type.Object({})),
+  brokerTool("remember_preference", "记住偏好",
+    "Propose storing one explicit long-term memory (title + content). The user must approve it. Use only for a stable preference the user just stated, never for passwords or credentials.",
+    Type.Object({ title: Type.String({ minLength: 1, maxLength: 120 }), content: Type.String({ minLength: 1, maxLength: 600 }) })),
+  brokerTool("forget_preference", "移除偏好",
+    "Propose removing one explicit long-term memory by its exact title. The user must approve it.",
+    Type.Object({ title: Type.String({ minLength: 1, maxLength: 120 }) })),
+  brokerTool("launch_wuthering_waves", "启动鸣潮",
+    "Launch the Wuthering Waves game client if it is installed. The user must approve the first launch; afterwards it can be trusted.",
+    Type.Object({})),
   ];
 }

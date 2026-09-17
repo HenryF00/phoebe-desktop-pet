@@ -11,6 +11,7 @@
 mod apps;
 mod audit;
 mod grants;
+mod location;
 mod paths;
 mod registry;
 
@@ -67,6 +68,17 @@ pub fn allowed_tools_for(interaction_mode: InteractionMode, action_mode: ActionM
                 "focus_application",
                 "reveal_file",
                 "open_file_with_application",
+                "browser_open",
+                "browser_snapshot",
+                "browser_click",
+                "browser_type",
+                "browser_select",
+                "browser_wait",
+                "browser_extract_text",
+                "browser_close",
+                "remember_preference",
+                "forget_preference",
+                "launch_wuthering_waves",
             ]
             .iter()
             .map(|name| (*name).to_owned()),

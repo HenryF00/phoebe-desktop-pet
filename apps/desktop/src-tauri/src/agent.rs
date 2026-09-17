@@ -181,6 +181,7 @@ struct ActiveRun {
     question: String,
     private_at_start: bool,
     allowed_tools: Vec<String>,
+    mode: crate::settings::InteractionMode,
 }
 
 #[derive(Clone, Serialize)]
@@ -196,27 +197,17 @@ struct FileAttachment {
     content: String,
 }
 
-#[derive(Clone, Serialize)]
-struct LocationAttachment {
-    latitude: f64,
-    longitude: f64,
-    #[serde(rename = "accuracyMeters")]
-    accuracy_meters: f64,
-    #[serde(rename = "capturedAt")]
-    captured_at: String,
-}
-
 #[derive(Default)]
 pub struct AgentSupervisor {
     process: Arc<Mutex<Option<AgentProcess>>>,
     active: Arc<Mutex<Option<ActiveRun>>>,
     generation: Arc<AtomicU64>,
     file_attachment: Mutex<Option<FileAttachment>>,
-    location_attachment: Mutex<Option<LocationAttachment>>,
     usage: Arc<Mutex<TokenUsageSnapshot>>,
     context_usage: Arc<Mutex<ContextUsageSnapshot>>,
-    /// Conversation currently loaded into the sidecar, so switching reseeds it.
-    applied_conversation: Arc<Mutex<Option<String>>>,
+    /// Conversation currently loaded into the sidecar, keyed by interaction
+    /// mode, so switching mode or conversation reseeds it.
+    applied_conversation: Arc<Mutex<Option<(crate::settings::InteractionMode, String)>>>,
 }
 
 pub fn key_status(store: &crate::secure_store::SecureStore) -> &'static str {
@@ -297,50 +288,11 @@ impl AgentSupervisor {
         Ok(name)
     }
 
-    pub fn attach_location(
-        &self,
-        latitude: f64,
-        longitude: f64,
-        accuracy_meters: f64,
-    ) -> Result<String, String> {
-        if self.is_busy() {
-            return Err("请先等待当前回复结束".into());
-        }
-        if !latitude.is_finite()
-            || !longitude.is_finite()
-            || !accuracy_meters.is_finite()
-            || latitude.abs() > 90.0
-            || longitude.abs() > 180.0
-            || !(0.0..=100_000.0).contains(&accuracy_meters)
-        {
-            return Err("设备定位结果无效".into());
-        }
-        let coarse_latitude = (latitude * 10.0).round() / 10.0;
-        let coarse_longitude = (longitude * 10.0).round() / 10.0;
-        *self
-            .location_attachment
-            .lock()
-            .map_err(|_| "定位授权状态不可用")? = Some(LocationAttachment {
-            latitude: coarse_latitude,
-            longitude: coarse_longitude,
-            accuracy_meters,
-            captured_at: chrono::Utc::now().to_rfc3339(),
-        });
-        Ok(format!(
-            "约 {:.1}°, {:.1}°",
-            coarse_latitude, coarse_longitude
-        ))
-    }
-
     pub fn clear_attachments(&self) -> Result<(), String> {
         *self
             .file_attachment
             .lock()
             .map_err(|_| "文件授权状态不可用")? = None;
-        *self
-            .location_attachment
-            .lock()
-            .map_err(|_| "定位授权状态不可用")? = None;
         Ok(())
     }
 
@@ -376,16 +328,12 @@ impl AgentSupervisor {
             .lock()
             .map_err(|_| "文件授权状态不可用")?
             .take();
-        let location = self
-            .location_attachment
-            .lock()
-            .map_err(|_| "定位授权状态不可用")?
-            .take();
         *active = Some(ActiveRun {
             run_id: run_id.to_owned(),
             question: text.to_owned(),
             private_at_start: settings.privacy_mode,
             allowed_tools: allowed_tools.clone(),
+            mode: interaction_mode,
         });
         drop(active);
         let usage_snapshot = {
@@ -404,7 +352,7 @@ impl AgentSupervisor {
             &search_proxy,
             serde_json::json!({
                 "type": "prompt", "runId": run_id, "text": text, "memories": memories,
-                "file": file, "location": location, "interactionMode": interaction_mode,
+                "file": file, "interactionMode": interaction_mode,
                 "tools": allowed_tools, "folderGrants": folder_grants
             }),
         );
@@ -457,18 +405,22 @@ impl AgentSupervisor {
         model: &str,
         search_proxy: &str,
     ) -> Result<(), String> {
+        let mode = app
+            .state::<crate::settings::SettingsStore>()
+            .get()?
+            .interaction_mode;
         let store = app.state::<crate::history::HistoryStore>();
-        let conversation_id = store.active_id()?;
+        let conversation_id = store.active_id(mode)?;
         let already_applied = self
             .applied_conversation
             .lock()
             .map_err(|_| "会话状态不可用")?
-            .as_deref()
-            == Some(conversation_id.as_str());
+            .as_ref()
+            == Some(&(mode, conversation_id.clone()));
         if already_applied {
             return Ok(());
         }
-        let seed = store.seed()?;
+        let seed = store.seed(mode)?;
         self.write_command(
             app,
             key,
@@ -481,7 +433,7 @@ impl AgentSupervisor {
             }),
         )?;
         *self.applied_conversation.lock().map_err(|_| "会话状态不可用")? =
-            Some(conversation_id);
+            Some((mode, conversation_id));
         Ok(())
     }
 
@@ -704,7 +656,7 @@ impl AgentSupervisor {
                             };
                             if handle
                                 .state::<crate::history::HistoryStore>()
-                                .save(&turn)
+                                .save(run.mode, &turn)
                                 .is_ok()
                             {
                                 "saved"
@@ -790,22 +742,6 @@ mod tests {
         assert!(validate_prompt("../../x", "你好").is_err());
         assert!(validate_prompt("r-1", "  ").is_err());
         assert!(validate_prompt("r-1", &"x".repeat(10_001)).is_err());
-    }
-
-    #[test]
-    fn location_is_one_time_coarse_and_validated() {
-        let supervisor = AgentSupervisor::default();
-        assert!(supervisor.attach_location(999.0, 0.0, 1.0).is_err());
-        assert!(supervisor.attach_location(30.1234, 120.2678, 500.0).is_ok());
-        let location = supervisor
-            .location_attachment
-            .lock()
-            .unwrap()
-            .take()
-            .unwrap();
-        assert_eq!(location.latitude, 30.1);
-        assert_eq!(location.longitude, 120.3);
-        assert!(supervisor.location_attachment.lock().unwrap().is_none());
     }
 
     #[test]

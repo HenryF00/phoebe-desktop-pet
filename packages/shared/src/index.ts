@@ -35,6 +35,8 @@ export type ToolName =
   | "list_granted_folders" | "list_directory" | "read_text_file" | "search_files"
   | "write_file" | "move_file" | "delete_file"
   | "list_installed_apps" | "reveal_file" | "open_file_with_application"
+  | "browser_open" | "browser_snapshot" | "browser_click" | "browser_type" | "browser_select"
+  | "browser_wait" | "browser_extract_text" | "browser_close"
   | "remember_preference" | "forget_preference";
 
 export interface ToolCall {

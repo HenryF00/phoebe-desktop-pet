@@ -3,6 +3,19 @@ use serde::Serialize;
 use std::{fs, path::Path, sync::Mutex};
 use tauri::{AppHandle, Manager};
 
+use crate::settings::InteractionMode;
+
+fn mode_key(mode: InteractionMode) -> &'static str {
+    match mode {
+        InteractionMode::Assistant => "assistant",
+        InteractionMode::Chat => "chat",
+    }
+}
+
+fn active_key(mode: InteractionMode) -> String {
+    format!("active_conversation:{}", mode_key(mode))
+}
+
 const MAX_QUESTION_BYTES: usize = 10_000;
 const MAX_ANSWER_BYTES: usize = 1_000_000;
 const MAX_RECENT_TURNS: i64 = 50;
@@ -72,7 +85,7 @@ fn initialize(connection: &mut Connection) -> Result<(), String> {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(|_| "无法读取历史数据库版本")?;
-    if version > 3 {
+    if version > 4 {
         return Err("历史数据库版本比当前应用更新；不会覆盖它".into());
     }
     if version == 0 {
@@ -135,6 +148,18 @@ fn initialize(connection: &mut Connection) -> Result<(), String> {
             )
             .map_err(|_| "无法迁移会话数据库")?;
         transaction.commit().map_err(|_| "无法提交会话数据库迁移")?;
+    }
+    if version <= 3 {
+        let transaction = connection.transaction().map_err(|_| "无法迁移会话模式")?;
+        transaction
+            .execute_batch(
+                "ALTER TABLE conversations ADD COLUMN mode TEXT NOT NULL DEFAULT 'assistant';
+            UPDATE app_meta SET key='active_conversation:assistant' WHERE key='active_conversation';
+            INSERT OR IGNORE INTO schema_migrations(version) VALUES (4);
+            PRAGMA user_version=4;",
+            )
+            .map_err(|_| "无法迁移会话模式")?;
+        transaction.commit().map_err(|_| "无法提交会话模式迁移")?;
     }
     Ok(())
 }
@@ -243,6 +268,79 @@ fn delete_memory(connection: &Connection, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The Agent proposes a preference and the user approves it; storing it as
+/// `user_explicit` keeps the same trust level as a manually added memory.
+fn remember_preference(connection: &Connection, title: &str, content: &str) -> Result<(), String> {
+    validate_memory(title, content)?;
+    let title = title.trim();
+    let content = content.trim();
+    let existing: Option<String> = connection
+        .query_row("SELECT id FROM memories WHERE title=?1 LIMIT 1", [title], |row| row.get(0))
+        .optional()
+        .map_err(|_| "无法读取长期记忆")?;
+    match existing {
+        Some(id) => {
+            connection
+                .execute(
+                    "UPDATE memories SET content=?2, updated_at=CURRENT_TIMESTAMP WHERE id=?1 AND source='user_explicit'",
+                    params![id, content],
+                )
+                .map_err(|_| "无法更新长期记忆")?;
+        }
+        None => {
+            let count: i64 = connection
+                .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+                .map_err(|_| "无法检查长期记忆容量")?;
+            if count >= MAX_MEMORIES {
+                return Err("长期记忆已达到 100 条上限；请先整理旧条目".into());
+            }
+            connection
+                .execute(
+                    "INSERT INTO memories(id, title, content) VALUES (lower(hex(randomblob(16))), ?1, ?2)",
+                    params![title, content],
+                )
+                .map_err(|_| "无法保存长期记忆")?;
+        }
+    }
+    Ok(())
+}
+
+fn forget_preference(connection: &Connection, title: &str) -> Result<(), String> {
+    let title = title.trim();
+    if title.is_empty() || title.chars().any(char::is_control) {
+        return Err("记忆标题无效".into());
+    }
+    let changed = connection
+        .execute(
+            "DELETE FROM memories WHERE title=?1 AND source='user_explicit'",
+            [title],
+        )
+        .map_err(|_| "无法删除长期记忆")?;
+    if changed == 0 {
+        return Err("没有找到标题匹配的长期记忆".into());
+    }
+    Ok(())
+}
+
+fn memory_by_title(connection: &Connection, title: &str) -> Result<Option<ExplicitMemory>, String> {
+    connection
+        .query_row(
+            "SELECT id, title, content, created_at, updated_at FROM memories WHERE title=?1 ORDER BY updated_at DESC LIMIT 1",
+            [title.trim()],
+            |row| {
+                Ok(ExplicitMemory {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    content: row.get(2)?,
+                    created_at: row.get(3)?,
+                    updated_at: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|_| "无法读取长期记忆".to_owned())
+}
+
 fn open_at(path: &Path) -> Result<Connection, String> {
     let mut connection = Connection::open(path).map_err(|_| "无法打开历史数据库")?;
     initialize(&mut connection)?;
@@ -265,32 +363,36 @@ fn valid_conversation_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
-fn set_active(connection: &Connection, id: &str) -> Result<(), String> {
+fn set_active(connection: &Connection, mode: InteractionMode, id: &str) -> Result<(), String> {
     connection
         .execute(
-            "INSERT INTO app_meta(key, value) VALUES ('active_conversation', ?1)
+            "INSERT INTO app_meta(key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            [id],
+            params![active_key(mode), id],
         )
         .map_err(|_| "无法保存当前会话")?;
     Ok(())
 }
 
-fn create_conversation_row(connection: &Connection) -> Result<String, String> {
+fn create_conversation_row(connection: &Connection, mode: InteractionMode) -> Result<String, String> {
     let id: String = connection
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
         .map_err(|_| "无法生成会话标识")?;
     connection
-        .execute("INSERT INTO conversations(id, title) VALUES (?1, '')", [&id])
+        .execute(
+            "INSERT INTO conversations(id, title, mode) VALUES (?1, '', ?2)",
+            params![id, mode_key(mode)],
+        )
         .map_err(|_| "无法新建会话")?;
     Ok(id)
 }
 
-fn active_conversation_id(connection: &Connection) -> Result<String, String> {
+fn active_conversation_id(connection: &Connection, mode: InteractionMode) -> Result<String, String> {
+    let key = active_key(mode);
     let stored: Option<String> = connection
         .query_row(
-            "SELECT value FROM app_meta WHERE key='active_conversation'",
-            [],
+            "SELECT value FROM app_meta WHERE key=?1",
+            [&key],
             |row| row.get(0),
         )
         .optional()
@@ -298,8 +400,8 @@ fn active_conversation_id(connection: &Connection) -> Result<String, String> {
     if let Some(id) = stored {
         let exists: bool = connection
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM conversations WHERE id=?1)",
-                [&id],
+                "SELECT EXISTS(SELECT 1 FROM conversations WHERE id=?1 AND mode=?2)",
+                params![id, mode_key(mode)],
                 |row| row.get(0),
             )
             .map_err(|_| "无法验证当前会话")?;
@@ -309,17 +411,17 @@ fn active_conversation_id(connection: &Connection) -> Result<String, String> {
     }
     let newest: Option<String> = connection
         .query_row(
-            "SELECT id FROM conversations ORDER BY updated_at DESC, created_at DESC, id LIMIT 1",
-            [],
+            "SELECT id FROM conversations WHERE mode=?1 ORDER BY updated_at DESC, created_at DESC, id LIMIT 1",
+            [mode_key(mode)],
             |row| row.get(0),
         )
         .optional()
         .map_err(|_| "无法选择会话")?;
     let id = match newest {
         Some(id) => id,
-        None => create_conversation_row(connection)?,
+        None => create_conversation_row(connection, mode)?,
     };
-    set_active(connection, &id)?;
+    set_active(connection, mode, &id)?;
     Ok(id)
 }
 
@@ -342,17 +444,18 @@ fn conversation_by_id(connection: &Connection, id: &str) -> Result<Conversation,
         .map_err(|_| "该会话不存在".to_owned())
 }
 
-fn list_conversations(connection: &Connection) -> Result<Vec<Conversation>, String> {
+fn list_conversations(connection: &Connection, mode: InteractionMode) -> Result<Vec<Conversation>, String> {
     let mut statement = connection
         .prepare(
             "SELECT c.id, c.title, c.updated_at,
                 (SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id AND m.role='user')
              FROM conversations c
+             WHERE c.mode=?1
              ORDER BY c.updated_at DESC, c.created_at DESC, c.id",
         )
         .map_err(|_| "无法读取会话列表")?;
     let rows = statement
-        .query_map([], |row| {
+        .query_map([mode_key(mode)], |row| {
             Ok(Conversation {
                 id: row.get(0)?,
                 title: row.get(1)?,
@@ -378,7 +481,7 @@ fn derive_title(question: &str) -> String {
     }
 }
 
-fn insert_turn(connection: &mut Connection, turn: &HistoryTurn) -> Result<(), String> {
+fn insert_turn(connection: &mut Connection, mode: InteractionMode, turn: &HistoryTurn) -> Result<(), String> {
     if !valid_run_id(&turn.run_id)
         || turn.question.trim().is_empty()
         || turn.question.len() > MAX_QUESTION_BYTES
@@ -386,7 +489,7 @@ fn insert_turn(connection: &mut Connection, turn: &HistoryTurn) -> Result<(), St
     {
         return Err("历史消息内容或标识无效".into());
     }
-    let active = active_conversation_id(connection)?;
+    let active = active_conversation_id(connection, mode)?;
     let transaction = connection.transaction().map_err(|_| "无法开始历史事务")?;
     for (role, content) in [
         ("user", turn.question.as_str()),
@@ -423,8 +526,8 @@ fn insert_turn(connection: &mut Connection, turn: &HistoryTurn) -> Result<(), St
         .map_err(|_| "无法提交历史消息".to_owned())
 }
 
-fn recent_turns(connection: &Connection) -> Result<Vec<HistoryTurn>, String> {
-    let active = active_conversation_id(connection)?;
+fn recent_turns(connection: &Connection, mode: InteractionMode) -> Result<Vec<HistoryTurn>, String> {
+    let active = active_conversation_id(connection, mode)?;
     let mut statement = connection
         .prepare(
             "SELECT u.turn_id, u.content, a.content FROM messages AS u
@@ -468,8 +571,8 @@ fn seed_content(content: &str) -> String {
 
 /// Text-only replay of the active conversation, oldest first. Keeps the most
 /// recent turns and truncates oversized messages so the seed stays bounded.
-fn conversation_seed(connection: &Connection) -> Result<Vec<SeedMessage>, String> {
-    let turns = recent_turns(connection)?;
+fn conversation_seed(connection: &Connection, mode: InteractionMode) -> Result<Vec<SeedMessage>, String> {
+    let turns = recent_turns(connection, mode)?;
     let mut retained: Vec<(String, String)> = Vec::new();
     let mut total = 0usize;
     for turn in turns.iter().rev() {
@@ -496,43 +599,43 @@ fn conversation_seed(connection: &Connection) -> Result<Vec<SeedMessage>, String
     Ok(seed)
 }
 
-fn create_conversation(connection: &Connection) -> Result<Conversation, String> {
+fn create_conversation(connection: &Connection, mode: InteractionMode) -> Result<Conversation, String> {
     let count: i64 = connection
         .query_row("SELECT COUNT(*) FROM conversations", [], |row| row.get(0))
         .map_err(|_| "无法检查会话容量")?;
     if count >= MAX_CONVERSATIONS {
         return Err("会话数量已达上限；请先删除旧会话".into());
     }
-    let id = create_conversation_row(connection)?;
-    set_active(connection, &id)?;
+    let id = create_conversation_row(connection, mode)?;
+    set_active(connection, mode, &id)?;
     conversation_by_id(connection, &id)
 }
 
-fn switch_conversation(connection: &Connection, id: &str) -> Result<(), String> {
+fn switch_conversation(connection: &Connection, mode: InteractionMode, id: &str) -> Result<(), String> {
     if !valid_conversation_id(id) {
         return Err("会话标识无效".into());
     }
     let exists: bool = connection
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM conversations WHERE id=?1)",
-            [id],
+            "SELECT EXISTS(SELECT 1 FROM conversations WHERE id=?1 AND mode=?2)",
+            params![id, mode_key(mode)],
             |row| row.get(0),
         )
         .map_err(|_| "无法验证会话")?;
     if !exists {
         return Err("该会话不存在".into());
     }
-    set_active(connection, id)
+    set_active(connection, mode, id)
 }
 
 /// Deletes a conversation and returns the id that is active afterwards.
-fn delete_conversation(connection: &Connection, id: &str) -> Result<String, String> {
+fn delete_conversation(connection: &Connection, mode: InteractionMode, id: &str) -> Result<String, String> {
     if !valid_conversation_id(id) {
         return Err("会话标识无效".into());
     }
-    let active = active_conversation_id(connection)?;
+    let active = active_conversation_id(connection, mode)?;
     let changed = connection
-        .execute("DELETE FROM conversations WHERE id=?1", [id])
+        .execute("DELETE FROM conversations WHERE id=?1 AND mode=?2", params![id, mode_key(mode)])
         .map_err(|_| "无法删除会话")?;
     if changed == 0 {
         return Err("该会话不存在".into());
@@ -542,17 +645,17 @@ fn delete_conversation(connection: &Connection, id: &str) -> Result<String, Stri
     }
     let next: Option<String> = connection
         .query_row(
-            "SELECT id FROM conversations ORDER BY updated_at DESC, created_at DESC, id LIMIT 1",
-            [],
+            "SELECT id FROM conversations WHERE mode=?1 ORDER BY updated_at DESC, created_at DESC, id LIMIT 1",
+            [mode_key(mode)],
             |row| row.get(0),
         )
         .optional()
         .map_err(|_| "无法选择会话")?;
     let next = match next {
         Some(id) => id,
-        None => create_conversation_row(connection)?,
+        None => create_conversation_row(connection, mode)?,
     };
-    set_active(connection, &next)?;
+    set_active(connection, mode, &next)?;
     Ok(next)
 }
 
@@ -582,8 +685,8 @@ fn rename_conversation(connection: &Connection, id: &str, title: &str) -> Result
 /// Clears every message of the active conversation while keeping the
 /// conversation itself, resetting its auto-derived title so the next first
 /// question can title it again.
-fn clear_conversation(connection: &Connection) -> Result<(), String> {
-    let active = active_conversation_id(connection)?;
+fn clear_conversation(connection: &Connection, mode: InteractionMode) -> Result<(), String> {
+    let active = active_conversation_id(connection, mode)?;
     connection
         .execute("DELETE FROM messages WHERE conversation_id=?1", [&active])
         .map_err(|_| "无法清理会话消息")?;
@@ -618,35 +721,35 @@ impl HistoryStore {
         )
     }
 
-    pub fn recent(&self) -> Result<Vec<HistoryTurn>, String> {
-        self.with(recent_turns)
+    pub fn recent(&self, mode: InteractionMode) -> Result<Vec<HistoryTurn>, String> {
+        self.with(|connection| recent_turns(connection, mode))
     }
 
-    pub fn active(&self) -> Result<ActiveConversation, String> {
+    pub fn active(&self, mode: InteractionMode) -> Result<ActiveConversation, String> {
         self.with(|connection| {
-            let id = active_conversation_id(connection)?;
+            let id = active_conversation_id(connection, mode)?;
             Ok(ActiveConversation {
                 conversation: conversation_by_id(connection, &id)?,
-                turns: recent_turns(connection)?,
+                turns: recent_turns(connection, mode)?,
             })
         })
     }
 
-    pub fn active_id(&self) -> Result<String, String> {
-        self.with(active_conversation_id)
+    pub fn active_id(&self, mode: InteractionMode) -> Result<String, String> {
+        self.with(|connection| active_conversation_id(connection, mode))
     }
 
-    pub fn seed(&self) -> Result<Vec<SeedMessage>, String> {
-        self.with(conversation_seed)
+    pub fn seed(&self, mode: InteractionMode) -> Result<Vec<SeedMessage>, String> {
+        self.with(|connection| conversation_seed(connection, mode))
     }
 
-    pub fn list(&self) -> Result<Vec<Conversation>, String> {
-        self.with(list_conversations)
+    pub fn list(&self, mode: InteractionMode) -> Result<Vec<Conversation>, String> {
+        self.with(|connection| list_conversations(connection, mode))
     }
 
-    pub fn create(&self) -> Result<ActiveConversation, String> {
+    pub fn create(&self, mode: InteractionMode) -> Result<ActiveConversation, String> {
         self.with(|connection| {
-            let conversation = create_conversation(connection)?;
+            let conversation = create_conversation(connection, mode)?;
             Ok(ActiveConversation {
                 conversation,
                 turns: Vec::new(),
@@ -654,22 +757,22 @@ impl HistoryStore {
         })
     }
 
-    pub fn switch(&self, id: &str) -> Result<ActiveConversation, String> {
+    pub fn switch(&self, mode: InteractionMode, id: &str) -> Result<ActiveConversation, String> {
         self.with(|connection| {
-            switch_conversation(connection, id)?;
+            switch_conversation(connection, mode, id)?;
             Ok(ActiveConversation {
                 conversation: conversation_by_id(connection, id)?,
-                turns: recent_turns(connection)?,
+                turns: recent_turns(connection, mode)?,
             })
         })
     }
 
-    pub fn delete(&self, id: &str) -> Result<ActiveConversation, String> {
+    pub fn delete(&self, mode: InteractionMode, id: &str) -> Result<ActiveConversation, String> {
         self.with(|connection| {
-            let next = delete_conversation(connection, id)?;
+            let next = delete_conversation(connection, mode, id)?;
             Ok(ActiveConversation {
                 conversation: conversation_by_id(connection, &next)?,
-                turns: recent_turns(connection)?,
+                turns: recent_turns(connection, mode)?,
             })
         })
     }
@@ -678,18 +781,19 @@ impl HistoryStore {
         self.with(|connection| rename_conversation(connection, id, title))
     }
 
-    pub fn save(&self, turn: &HistoryTurn) -> Result<(), String> {
+    pub fn save(&self, mode: InteractionMode, turn: &HistoryTurn) -> Result<(), String> {
         let mut guard = self.0.lock().map_err(|_| "历史数据库状态不可用")?;
         insert_turn(
             guard
                 .as_mut()
                 .ok_or("历史数据库不可用，请检查应用数据目录")?,
+            mode,
             turn,
         )
     }
 
-    pub fn clear(&self) -> Result<(), String> {
-        self.with(clear_conversation)
+    pub fn clear(&self, mode: InteractionMode) -> Result<(), String> {
+        self.with(|connection| clear_conversation(connection, mode))
     }
 
     pub fn memories(&self) -> Result<Vec<ExplicitMemory>, String> {
@@ -708,15 +812,30 @@ impl HistoryStore {
     pub fn delete_memory(&self, id: &str) -> Result<(), String> {
         self.with(|connection| delete_memory(connection, id))
     }
+
+    /// Agent-proposed preference storage: update by title or insert new.
+    pub fn remember_preference(&self, title: &str, content: &str) -> Result<(), String> {
+        self.with(|connection| remember_preference(connection, title, content))
+    }
+
+    /// Agent-proposed preference removal, matched by title.
+    pub fn forget_preference(&self, title: &str) -> Result<(), String> {
+        self.with(|connection| forget_preference(connection, title))
+    }
+
+    pub fn memory_by_title(&self, title: &str) -> Result<Option<ExplicitMemory>, String> {
+        self.with(|connection| memory_by_title(connection, title))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         active_conversation_id, clear_conversation, conversation_seed, create_conversation,
-        delete_conversation, delete_memory, initialize, insert_turn, list_conversations, may_persist,
-        memories, open_at, recent_turns, rename_conversation, switch_conversation, upsert_memory,
-        validate_memory, HistoryTurn,
+        delete_conversation, delete_memory, forget_preference, initialize, insert_turn,
+        list_conversations, may_persist, memories, open_at, recent_turns, remember_preference,
+        rename_conversation, switch_conversation, upsert_memory, validate_memory, HistoryTurn,
+        InteractionMode,
     };
     use rusqlite::Connection;
     use std::{
@@ -738,22 +857,22 @@ mod tests {
         initialize(&mut connection).unwrap();
         initialize(&mut connection).unwrap();
         let only = turn("run-1", "你好", "你好。");
-        insert_turn(&mut connection, &only).unwrap();
-        insert_turn(&mut connection, &only).unwrap();
-        assert_eq!(recent_turns(&connection).unwrap(), vec![only]);
-        assert_eq!(list_conversations(&connection).unwrap()[0].title, "你好");
+        insert_turn(&mut connection, InteractionMode::Assistant, &only).unwrap();
+        insert_turn(&mut connection, InteractionMode::Assistant, &only).unwrap();
+        assert_eq!(recent_turns(&connection, InteractionMode::Assistant).unwrap(), vec![only]);
+        assert_eq!(list_conversations(&connection, InteractionMode::Assistant).unwrap()[0].title, "你好");
     }
 
     #[test]
     fn conversations_are_isolated_and_switchable() {
         let mut connection = Connection::open_in_memory().unwrap();
         initialize(&mut connection).unwrap();
-        insert_turn(&mut connection, &turn("run-1", "第一问", "第一答")).unwrap();
-        let second = create_conversation(&connection).unwrap();
+        insert_turn(&mut connection, InteractionMode::Assistant, &turn("run-1", "第一问", "第一答")).unwrap();
+        let second = create_conversation(&connection, InteractionMode::Assistant).unwrap();
         assert_eq!(second.title, "");
-        assert!(recent_turns(&connection).unwrap().is_empty());
-        insert_turn(&mut connection, &turn("run-2", "第二问", "第二答")).unwrap();
-        let conversations = list_conversations(&connection).unwrap();
+        assert!(recent_turns(&connection, InteractionMode::Assistant).unwrap().is_empty());
+        insert_turn(&mut connection, InteractionMode::Assistant, &turn("run-2", "第二问", "第二答")).unwrap();
+        let conversations = list_conversations(&connection, InteractionMode::Assistant).unwrap();
         assert_eq!(conversations.len(), 2);
 
         // Switching back restores the first conversation and its seed.
@@ -763,45 +882,66 @@ mod tests {
             .unwrap()
             .id
             .clone();
-        switch_conversation(&connection, &first).unwrap();
-        assert_eq!(active_conversation_id(&connection).unwrap(), first);
-        assert_eq!(recent_turns(&connection).unwrap()[0].question, "第一问");
-        let seed = conversation_seed(&connection).unwrap();
+        switch_conversation(&connection, InteractionMode::Assistant, &first).unwrap();
+        assert_eq!(active_conversation_id(&connection, InteractionMode::Assistant).unwrap(), first);
+        assert_eq!(recent_turns(&connection, InteractionMode::Assistant).unwrap()[0].question, "第一问");
+        let seed = conversation_seed(&connection, InteractionMode::Assistant).unwrap();
         assert_eq!(seed.len(), 2);
         assert_eq!(seed[0].content, "第一问");
         assert_eq!(seed[1].role, "assistant");
 
         // Deleting the active conversation falls back to the remaining one.
-        let remaining = delete_conversation(&connection, &first).unwrap();
+        let remaining = delete_conversation(&connection, InteractionMode::Assistant, &first).unwrap();
         assert_ne!(remaining, first);
-        assert_eq!(list_conversations(&connection).unwrap().len(), 1);
+        assert_eq!(list_conversations(&connection, InteractionMode::Assistant).unwrap().len(), 1);
     }
 
     #[test]
     fn deleting_the_last_conversation_creates_a_fresh_one() {
         let mut connection = Connection::open_in_memory().unwrap();
         initialize(&mut connection).unwrap();
-        let id = active_conversation_id(&connection).unwrap();
-        let next = delete_conversation(&connection, &id).unwrap();
+        let id = active_conversation_id(&connection, InteractionMode::Assistant).unwrap();
+        let next = delete_conversation(&connection, InteractionMode::Assistant, &id).unwrap();
         assert_ne!(next, id);
-        assert!(recent_turns(&connection).unwrap().is_empty());
+        assert!(recent_turns(&connection, InteractionMode::Assistant).unwrap().is_empty());
+    }
+
+    #[test]
+    fn conversations_are_isolated_by_mode() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize(&mut connection).unwrap();
+        insert_turn(&mut connection, InteractionMode::Assistant, &turn("a-1", "助手问题", "助手回答")).unwrap();
+        // Chat mode starts with its own empty conversation, not the assistant one.
+        assert!(recent_turns(&connection, InteractionMode::Chat).unwrap().is_empty());
+        insert_turn(&mut connection, InteractionMode::Chat, &turn("c-1", "聊天问题", "聊天回答")).unwrap();
+
+        assert_eq!(list_conversations(&connection, InteractionMode::Assistant).unwrap().len(), 1);
+        assert_eq!(list_conversations(&connection, InteractionMode::Chat).unwrap().len(), 1);
+        assert_eq!(recent_turns(&connection, InteractionMode::Assistant).unwrap()[0].question, "助手问题");
+        assert_eq!(recent_turns(&connection, InteractionMode::Chat).unwrap()[0].question, "聊天问题");
+
+        let assistant_id = active_conversation_id(&connection, InteractionMode::Assistant).unwrap();
+        let chat_id = active_conversation_id(&connection, InteractionMode::Chat).unwrap();
+        assert_ne!(assistant_id, chat_id);
+        let chat_seed = conversation_seed(&connection, InteractionMode::Chat).unwrap();
+        assert_eq!(chat_seed[0].content, "聊天问题");
     }
 
     #[test]
     fn clearing_keeps_the_conversation_and_clears_messages() {
         let mut connection = Connection::open_in_memory().unwrap();
         initialize(&mut connection).unwrap();
-        let id = active_conversation_id(&connection).unwrap();
-        insert_turn(&mut connection, &turn("run-1", "第一问", "第一答")).unwrap();
-        assert_eq!(list_conversations(&connection).unwrap()[0].title, "第一问");
-        clear_conversation(&connection).unwrap();
-        assert_eq!(active_conversation_id(&connection).unwrap(), id);
-        assert!(recent_turns(&connection).unwrap().is_empty());
-        assert_eq!(conversation_seed(&connection).unwrap().len(), 0);
-        assert_eq!(list_conversations(&connection).unwrap()[0].title, "");
+        let id = active_conversation_id(&connection, InteractionMode::Assistant).unwrap();
+        insert_turn(&mut connection, InteractionMode::Assistant, &turn("run-1", "第一问", "第一答")).unwrap();
+        assert_eq!(list_conversations(&connection, InteractionMode::Assistant).unwrap()[0].title, "第一问");
+        clear_conversation(&connection, InteractionMode::Assistant).unwrap();
+        assert_eq!(active_conversation_id(&connection, InteractionMode::Assistant).unwrap(), id);
+        assert!(recent_turns(&connection, InteractionMode::Assistant).unwrap().is_empty());
+        assert_eq!(conversation_seed(&connection, InteractionMode::Assistant).unwrap().len(), 0);
+        assert_eq!(list_conversations(&connection, InteractionMode::Assistant).unwrap()[0].title, "");
         // A fresh turn can title the conversation again.
-        insert_turn(&mut connection, &turn("run-2", "第二问", "第二答")).unwrap();
-        assert_eq!(list_conversations(&connection).unwrap()[0].title, "第二问");
+        insert_turn(&mut connection, InteractionMode::Assistant, &turn("run-2", "第二问", "第二答")).unwrap();
+        assert_eq!(list_conversations(&connection, InteractionMode::Assistant).unwrap()[0].title, "第二问");
     }
 
     #[test]
@@ -813,11 +953,12 @@ mod tests {
             let run_id = format!("run-{index}");
             insert_turn(
                 &mut connection,
+                InteractionMode::Assistant,
                 &turn(&run_id, &format!("问题{index}"), &"答".repeat(1_500)),
             )
             .unwrap();
         }
-        let seed = conversation_seed(&connection).unwrap();
+        let seed = conversation_seed(&connection, InteractionMode::Assistant).unwrap();
         let total: usize = seed.iter().map(|message| message.content.len()).sum();
         assert!(total <= super::MAX_SEED_BYTES + super::MAX_SEED_MESSAGE_BYTES * 2);
         assert_eq!(seed[0].role, "user");
@@ -831,13 +972,13 @@ mod tests {
     fn conversation_titles_are_bounded_and_renameable() {
         let mut connection = Connection::open_in_memory().unwrap();
         initialize(&mut connection).unwrap();
-        let id = active_conversation_id(&connection).unwrap();
+        let id = active_conversation_id(&connection, InteractionMode::Assistant).unwrap();
         assert!(rename_conversation(&connection, &id, "  新标题  ").is_ok());
-        assert_eq!(list_conversations(&connection).unwrap()[0].title, "新标题");
+        assert_eq!(list_conversations(&connection, InteractionMode::Assistant).unwrap()[0].title, "新标题");
         assert!(rename_conversation(&connection, &id, "   ").is_err());
         assert!(rename_conversation(&connection, &id, &"x".repeat(61)).is_err());
-        insert_turn(&mut connection, &turn("run-1", "这是一个很长的首个问题用来生成标题", "答")).unwrap();
-        assert_eq!(list_conversations(&connection).unwrap()[0].title, "新标题");
+        insert_turn(&mut connection, InteractionMode::Assistant, &turn("run-1", "这是一个很长的首个问题用来生成标题", "答")).unwrap();
+        assert_eq!(list_conversations(&connection, InteractionMode::Assistant).unwrap()[0].title, "新标题");
     }
 
     #[test]
@@ -848,8 +989,8 @@ mod tests {
         let mut connection = Connection::open_in_memory().unwrap();
         initialize(&mut connection).unwrap();
         let invalid = turn("../secret", "你好", "回复");
-        assert!(insert_turn(&mut connection, &invalid).is_err());
-        assert!(recent_turns(&connection).unwrap().is_empty());
+        assert!(insert_turn(&mut connection, InteractionMode::Assistant, &invalid).is_err());
+        assert!(recent_turns(&connection, InteractionMode::Assistant).unwrap().is_empty());
     }
 
     #[test]
@@ -865,15 +1006,15 @@ mod tests {
         let only = turn("persist-1", "本机吗", "是。");
         {
             let mut connection = open_at(&path).unwrap();
-            insert_turn(&mut connection, &only).unwrap();
+            insert_turn(&mut connection, InteractionMode::Assistant, &only).unwrap();
         }
         {
             let connection = open_at(&path).unwrap();
-            assert_eq!(recent_turns(&connection).unwrap(), vec![only]);
-            let id = active_conversation_id(&connection).unwrap();
-            delete_conversation(&connection, &id).unwrap();
+            assert_eq!(recent_turns(&connection, InteractionMode::Assistant).unwrap(), vec![only]);
+            let id = active_conversation_id(&connection, InteractionMode::Assistant).unwrap();
+            delete_conversation(&connection, InteractionMode::Assistant, &id).unwrap();
         }
-        assert!(recent_turns(&open_at(&path).unwrap()).unwrap().is_empty());
+        assert!(recent_turns(&open_at(&path).unwrap(), InteractionMode::Assistant).unwrap().is_empty());
         fs::remove_file(&path).unwrap();
     }
 
@@ -889,11 +1030,11 @@ mod tests {
             PRAGMA user_version=1;").unwrap();
         initialize(&mut connection).unwrap();
         initialize(&mut connection).unwrap();
-        assert_eq!(recent_turns(&connection).unwrap()[0].answer, "旧回复");
+        assert_eq!(recent_turns(&connection, InteractionMode::Assistant).unwrap()[0].answer, "旧回复");
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
         upsert_memory(&connection, None, "语言", "默认使用简体中文").unwrap();
         assert_eq!(memories(&connection).unwrap().len(), 1);
     }
@@ -914,5 +1055,20 @@ mod tests {
         delete_memory(&connection, &id).unwrap();
         assert!(memories(&connection).unwrap().is_empty());
         assert!(delete_memory(&connection, &id).is_err());
+    }
+
+    #[test]
+    fn agent_preferences_upsert_by_title_and_forget() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize(&mut connection).unwrap();
+        remember_preference(&connection, "语言", "简体中文").unwrap();
+        assert_eq!(memories(&connection).unwrap()[0].content, "简体中文");
+        // Same title updates instead of duplicating.
+        remember_preference(&connection, "语言", "繁体中文").unwrap();
+        assert_eq!(memories(&connection).unwrap().len(), 1);
+        assert_eq!(memories(&connection).unwrap()[0].content, "繁体中文");
+        forget_preference(&connection, "语言").unwrap();
+        assert!(memories(&connection).unwrap().is_empty());
+        assert!(forget_preference(&connection, "语言").is_err());
     }
 }

@@ -4,7 +4,7 @@ import { parseCommand, encodeEvent } from "../src/protocol.mjs";
 
 test("valid commands preserve only internal fields", () => {
   assert.deepEqual(parseCommand('{"type":"prompt","runId":"r1","text":"你好","shell":"rm"}'),
-    { type: "prompt", runId: "r1", text: "你好", interactionMode: "assistant", memories: [], file: null, location: null });
+    { type: "prompt", runId: "r1", text: "你好", interactionMode: "assistant", memories: [], file: null });
   assert.deepEqual(parseCommand('{"type":"cancel","runId":"r1"}'), { type: "cancel", runId: "r1" });
 });
 
@@ -12,7 +12,7 @@ test("invalid and dangerous commands are rejected", () => {
   assert.throws(() => parseCommand('{"type":"exec","command":"pwd"}'));
   assert.throws(() => parseCommand('{"type":"prompt","runId":"r1","text":""}'));
   assert.deepEqual(parseCommand('{"type":"prompt","runId":"r1","text":"x","tools":["bash"]}'),
-    { type: "prompt", runId: "r1", text: "x", interactionMode: "assistant", memories: [], file: null, location: null });
+    { type: "prompt", runId: "r1", text: "x", interactionMode: "assistant", memories: [], file: null });
   assert.throws(() => parseCommand('{"type":"prompt","runId":"r1","text":"x","interactionMode":"admin"}'));
 });
 
@@ -34,14 +34,12 @@ test("interaction mode changes the response contract", async () => {
   assert.match(memorySystemPrompt([], "assistant"), /15 到 50 个中文字符/);
 });
 
-test("attachments are bounded and stripped to approved fields", () => {
+test("file attachments are bounded and stripped to approved fields", () => {
   const parsed = parseCommand(JSON.stringify({ type: "prompt", runId: "r1", text: "总结",
-    file: { name: "note.txt", content: "hello", path: "/private/secret" },
-    location: { latitude: 30.1, longitude: 120.2, accuracyMeters: 500, capturedAt: "2026-09-16T00:00:00Z", precise: true } }));
+    file: { name: "note.txt", content: "hello", path: "/private/secret" } }));
   assert.deepEqual(parsed.file, { name: "note.txt", content: "hello" });
-  assert.deepEqual(parsed.location, { latitude: 30.1, longitude: 120.2, accuracyMeters: 500, capturedAt: "2026-09-16T00:00:00Z" });
+  assert.equal("location" in parsed, false);
   assert.throws(() => parseCommand(JSON.stringify({ type: "prompt", runId: "r1", text: "x", file: { name: "x", content: "a".repeat(20_001) } })));
-  assert.throws(() => parseCommand(JSON.stringify({ type: "prompt", runId: "r1", text: "x", location: { latitude: 999, longitude: 0, accuracyMeters: 1, capturedAt: "now" } })));
 });
 
 test("events are one JSON object per line", () => {

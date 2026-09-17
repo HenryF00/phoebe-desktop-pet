@@ -1,4 +1,5 @@
 mod agent;
+mod browser;
 mod history;
 pub mod secure_store;
 mod settings;
@@ -202,6 +203,13 @@ fn update_quick_preferences(
     voice_enabled: bool,
 ) -> Result<QuickPreferences, String> {
     require_any_caller(&window, &["pet", "menu"])?;
+    let current_mode = app
+        .state::<settings::SettingsStore>()
+        .get()?
+        .interaction_mode;
+    if current_mode != interaction_mode && app.state::<AgentSupervisor>().is_busy() {
+        return Err("请先结束或停止当前回复，再切换模式".into());
+    }
     let settings = app
         .state::<settings::SettingsStore>()
         .update_quick_preferences(&app, interaction_mode, voice_enabled)?;
@@ -222,7 +230,10 @@ async fn get_recent_history(
     app: tauri::AppHandle,
 ) -> Result<Vec<history::HistoryTurn>, String> {
     require_caller(&window, "chat")?;
-    tauri::async_runtime::spawn_blocking(move || app.state::<HistoryStore>().recent())
+    tauri::async_runtime::spawn_blocking(move || {
+        let mode = active_interaction_mode(&app);
+        app.state::<HistoryStore>().recent(mode)
+    })
         .await
         .map_err(|_| "历史数据库线程不可用".to_owned())?
 }
@@ -233,7 +244,10 @@ async fn list_conversations(
     app: tauri::AppHandle,
 ) -> Result<Vec<history::Conversation>, String> {
     require_caller(&window, "chat")?;
-    tauri::async_runtime::spawn_blocking(move || app.state::<HistoryStore>().list())
+    tauri::async_runtime::spawn_blocking(move || {
+        let mode = active_interaction_mode(&app);
+        app.state::<HistoryStore>().list(mode)
+    })
         .await
         .map_err(|_| "历史数据库线程不可用".to_owned())?
 }
@@ -244,7 +258,10 @@ async fn get_active_conversation(
     app: tauri::AppHandle,
 ) -> Result<history::ActiveConversation, String> {
     require_caller(&window, "chat")?;
-    tauri::async_runtime::spawn_blocking(move || app.state::<HistoryStore>().active())
+    tauri::async_runtime::spawn_blocking(move || {
+        let mode = active_interaction_mode(&app);
+        app.state::<HistoryStore>().active(mode)
+    })
         .await
         .map_err(|_| "历史数据库线程不可用".to_owned())?
 }
@@ -259,7 +276,8 @@ async fn create_conversation(
         if app.state::<AgentSupervisor>().is_busy() {
             return Err("请先结束或停止当前回复，再新建会话".into());
         }
-        app.state::<HistoryStore>().create()
+        let mode = active_interaction_mode(&app);
+        app.state::<HistoryStore>().create(mode)
     })
     .await
     .map_err(|_| "历史数据库线程不可用".to_owned())?
@@ -276,7 +294,8 @@ async fn switch_conversation(
         if app.state::<AgentSupervisor>().is_busy() {
             return Err("请先结束或停止当前回复，再切换会话".into());
         }
-        app.state::<HistoryStore>().switch(&id)
+        let mode = active_interaction_mode(&app);
+        app.state::<HistoryStore>().switch(mode, &id)
     })
     .await
     .map_err(|_| "历史数据库线程不可用".to_owned())?
@@ -292,7 +311,8 @@ async fn rename_conversation(
     require_caller(&window, "chat")?;
     tauri::async_runtime::spawn_blocking(move || {
         app.state::<HistoryStore>().rename(&id, &title)?;
-        app.state::<HistoryStore>().active()
+        let mode = active_interaction_mode(&app);
+        app.state::<HistoryStore>().active(mode)
     })
     .await
     .map_err(|_| "历史数据库线程不可用".to_owned())?
@@ -309,9 +329,10 @@ async fn delete_conversation(
         if app.state::<AgentSupervisor>().is_busy() {
             return Err("请先结束或停止当前回复，再删除会话".into());
         }
+        let mode = active_interaction_mode(&app);
         let target = app
             .state::<HistoryStore>()
-            .list()?
+            .list(mode)?
             .into_iter()
             .find(|conversation| conversation.id == id)
             .ok_or("该会话不存在；请刷新列表")?;
@@ -325,9 +346,9 @@ async fn delete_conversation(
             .buttons(MessageDialogButtons::YesNo)
             .blocking_show();
         if !confirmed {
-            return Ok(app.state::<HistoryStore>().active()?);
+            return Ok(app.state::<HistoryStore>().active(mode)?);
         }
-        app.state::<HistoryStore>().delete(&id)
+        app.state::<HistoryStore>().delete(mode, &id)
     })
     .await
     .map_err(|_| "历史数据库线程不可用".to_owned())?
@@ -433,7 +454,8 @@ async fn clear_chat_history(
         if app.state::<AgentSupervisor>().is_busy() {
             return Err("确认期间开始了新回复；历史没有被清理".into());
         }
-        app.state::<HistoryStore>().clear()?;
+        let mode = active_interaction_mode(&app);
+        app.state::<HistoryStore>().clear(mode)?;
         Ok(true)
     })
         .await.map_err(|_| "历史数据库线程不可用".to_owned())?
@@ -569,6 +591,13 @@ fn require_caller(window: &tauri::WebviewWindow, expected: &str) -> Result<(), S
     } else {
         Err("当前窗口没有执行该操作的权限".to_owned())
     }
+}
+
+fn active_interaction_mode(app: &tauri::AppHandle) -> settings::InteractionMode {
+    app.state::<settings::SettingsStore>()
+        .get()
+        .map(|settings| settings.interaction_mode)
+        .unwrap_or_default()
 }
 
 fn is_allowed_caller(actual: &str, expected: &str) -> bool {
@@ -711,19 +740,6 @@ fn revoke_folder_grant(
 }
 
 #[tauri::command]
-fn attach_device_location(
-    window: tauri::WebviewWindow,
-    app: tauri::AppHandle,
-    latitude: f64,
-    longitude: f64,
-    accuracy_meters: f64,
-) -> Result<String, String> {
-    require_caller(&window, "chat")?;
-    app.state::<AgentSupervisor>()
-        .attach_location(latitude, longitude, accuracy_meters)
-}
-
-#[tauri::command]
 fn clear_agent_attachments(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
@@ -800,6 +816,7 @@ pub fn run() {
         .manage(AgentSupervisor::default())
         .manage(secure_store::SecureStore::default())
         .manage(VoiceService::default())
+        .manage(browser::BrowserService::default())
         .manage(HistoryStore::default())
         .manage(settings::SettingsStore::default())
         .manage(window_manager::PositionDebouncer::default())
@@ -821,6 +838,7 @@ pub fn run() {
             let _ = window_manager::apply_pet_scale(app.handle(), pet_scale_percent);
             let _ = app.state::<HistoryStore>().open(app.handle());
             window_manager::setup_tray(app)?;
+            window_manager::watch_display_changes(app.handle());
             if app
                 .state::<settings::SettingsStore>()
                 .get()
@@ -844,7 +862,6 @@ pub fn run() {
             select_folder_grant,
             list_folder_grants,
             revoke_folder_grant,
-            attach_device_location,
             clear_agent_attachments,
             cancel_agent,
             get_chat_visibility,
@@ -891,6 +908,7 @@ pub fn run() {
             }
             if let tauri::RunEvent::Exit = &event {
                 app.state::<VoiceService>().shutdown();
+                app.state::<browser::BrowserService>().shutdown();
             }
         });
 }

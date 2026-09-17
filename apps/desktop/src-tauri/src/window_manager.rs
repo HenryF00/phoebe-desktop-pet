@@ -333,6 +333,52 @@ pub fn clamp_pet(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn is_within(
+    position: PhysicalPosition<i32>,
+    size: PhysicalSize<u32>,
+    area: &PhysicalRect<i32, u32>,
+) -> bool {
+    position.x >= area.position.x
+        && position.y >= area.position.y
+        && position.x + size.width as i32 <= area.position.x + area.size.width as i32
+        && position.y + size.height as i32 <= area.position.y + area.size.height as i32
+}
+
+/// Watches for display hot-plug and wake-from-sleep by polling whether the pet
+/// still fits inside its current monitor's work area. When the display layout
+/// changes (a monitor is unplugged, re-arranged, or the machine wakes with a
+/// different layout), the pet is clamped back on-screen and dependent windows
+/// are re-anchored. The two-second cadence keeps the cost negligible and works
+/// across macOS and Windows without platform-specific notification plumbing.
+pub fn watch_display_changes(app: &AppHandle) {
+    let handle = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(2));
+        let Ok(pet) = window(&handle, "pet") else {
+            continue;
+        };
+        let Ok(area) = work_area(&pet) else {
+            continue;
+        };
+        let (Ok(position), Ok(size)) = (pet.outer_position(), pet.outer_size()) else {
+            continue;
+        };
+        if is_within(position, size, &area) {
+            continue;
+        }
+        let _ = clamp_pet(&handle);
+        if is_chat_visible(&handle).unwrap_or(false) {
+            let _ = position_chat(&handle);
+        }
+        if window(&handle, "menu")
+            .map(|menu| menu.is_visible().unwrap_or(false))
+            .unwrap_or(false)
+        {
+            let _ = position_pet_menu(&handle);
+        }
+    });
+}
+
 pub fn apply_pet_scale(app: &AppHandle, percent: u16) -> Result<(), String> {
     if !crate::settings::valid_pet_scale_percent(percent) {
         return Err("仅支持图标化以及 75%、100%、125% 和 150% 的桌宠大小".into());
@@ -570,7 +616,7 @@ pub fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
 #[cfg(test)]
 mod tests {
     use super::{
-        bottom_center_anchored_position, chat_position, clamp_position, menu_position,
+        bottom_center_anchored_position, chat_position, clamp_position, is_within, menu_position,
         normalized_axis, restored_axis,
     };
     use tauri::{PhysicalPosition, PhysicalRect, PhysicalSize};
@@ -672,6 +718,20 @@ mod tests {
             ),
             PhysicalPosition::new(100, 276)
         );
+    }
+
+    #[test]
+    fn detects_when_the_pet_leaves_the_work_area() {
+        let area = PhysicalRect {
+            position: PhysicalPosition::new(0, 24),
+            size: PhysicalSize::new(1920, 1040),
+        };
+        let size = PhysicalSize::new(240, 320);
+        assert!(is_within(PhysicalPosition::new(100, 100), size, &area));
+        // Off the left edge (monitor was unplugged).
+        assert!(!is_within(PhysicalPosition::new(-1000, 100), size, &area));
+        // Off the bottom edge (work area shrank after wake).
+        assert!(!is_within(PhysicalPosition::new(100, 900), size, &area));
     }
 
     #[test]

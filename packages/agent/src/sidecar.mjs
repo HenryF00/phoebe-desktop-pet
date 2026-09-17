@@ -10,6 +10,7 @@ import { inferReplyMotion } from "./motion.mjs";
 import { buildSpeechText } from "./speech.mjs";
 import { addTokenUsage, emptyTokenUsage } from "./usage.mjs";
 import { pruneMessages, estimateMessagesTokens, historyBudgetTokens } from "./context.mjs";
+import { compactIfNeeded } from "./summary.mjs";
 import { describeFailure, lastAssistantMessage } from "./errors.mjs";
 
 // Only the Rust supervisor should launch this in production. No frontend IPC or local port.
@@ -160,7 +161,6 @@ async function handle(command) {
   active = run;
   toolContext = {
     file: command.file,
-    location: command.location,
     requestTool: (tool, args, signal) => requestTool(tool, args, signal, run.runId),
   };
   send({ type: "state", state: "thinking", runId: run.runId });
@@ -173,6 +173,7 @@ async function handle(command) {
     const currentAgent = getAgent();
     currentAgent.state.systemPrompt = systemPromptFor(command.memories, command.interactionMode, allowed, command.folderGrants || []);
     currentAgent.state.tools = toolsForTurn(allowed);
+    currentAgent.state.messages = await compactIfNeeded(currentAgent.state.messages, models, model);
     const startingMessages = pruneMessages(currentAgent.state.messages);
     currentAgent.state.messages = startingMessages;
     sendContextUsage(run.runId, startingMessages);
@@ -201,7 +202,7 @@ async function handle(command) {
     clearTimeout(timeout);
     abortPending(run.runId);
     if (agent && !agent.state.isStreaming) {
-      const finalMessages = command.file || command.location ? [] : pruneMessages(agent.state.messages);
+      const finalMessages = command.file ? [] : pruneMessages(agent.state.messages);
       agent.state.messages = finalMessages;
       sendContextUsage(run.runId, finalMessages);
     }

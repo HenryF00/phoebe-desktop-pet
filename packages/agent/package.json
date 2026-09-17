@@ -1,6 +1,6 @@
 {
   "name": "@phoebe/agent",
-  "version": "0.5.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,6 +11,8 @@
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.85.1",
     "@earendil-works/pi-ai": "0.85.1",
+    "chromium-bidi": "^1.2.0",
+    "playwright-core": "^1.54.1",
     "typebox": "1.3.7",
     "undici": "6.28.0"
   },
