@@ -13,7 +13,8 @@ export const SAFE_DEFAULT_TOOLS = [
 /** Every tool name this sidecar can define. Unknown names are never registered. */
 export const ALL_TOOL_NAMES = [...SAFE_DEFAULT_TOOLS, "open_url",
   "list_granted_folders", "list_directory", "read_text_file", "search_files",
-  "write_file", "move_file", "delete_file"];
+  "write_file", "move_file", "delete_file",
+  "list_installed_apps", "launch_application", "focus_application", "reveal_file", "open_file_with_application"];
 
 function unwrapSearchUrl(value) {
   try {
@@ -163,5 +164,23 @@ export function createAgentTools(options = {}) {
     "Move one file or folder inside a granted folder to the system trash. Requires write permission and user approval; the item stays recoverable.",
     Type.Object({ grantId: Type.String({ minLength: 32, maxLength: 32 }),
       relativePath: Type.String({ minLength: 1, maxLength: 1024 }) })),
+  brokerTool("list_installed_apps", "查看已安装应用",
+    "List installed applications with an opaque appId and name. Always call this before launching or focusing an app; never guess an appId or pass a path.",
+    Type.Object({})),
+  brokerTool("launch_application", "启动应用",
+    "Launch an installed application by its appId from list_installed_apps. The user must approve it. Never pass a file path.",
+    Type.Object({ appId: Type.String({ minLength: 1, maxLength: 200 }) })),
+  brokerTool("focus_application", "切换应用",
+    "Bring an installed application to the front by its appId (starts it if not running). The user must approve it. Never pass a file path.",
+    Type.Object({ appId: Type.String({ minLength: 1, maxLength: 200 }) })),
+  brokerTool("reveal_file", "在文件管理器中显示",
+    "Reveal one file or folder inside a granted folder in the system file manager, using grantId plus a relative path. The user must approve it.",
+    Type.Object({ grantId: Type.String({ minLength: 32, maxLength: 32 }),
+      relativePath: Type.String({ minLength: 1, maxLength: 1024 }) })),
+  brokerTool("open_file_with_application", "用指定应用打开文件",
+    "Open one file inside a granted folder with a specific installed application, using grantId, a relative path and an appId. The user must approve it.",
+    Type.Object({ grantId: Type.String({ minLength: 32, maxLength: 32 }),
+      relativePath: Type.String({ minLength: 1, maxLength: 1024 }),
+      appId: Type.String({ minLength: 1, maxLength: 200 }) })),
   ];
 }

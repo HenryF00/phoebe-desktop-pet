@@ -52,6 +52,12 @@ enum AgentEvent {
         request_id: String,
         detail: String,
     },
+    ContextUsage {
+        #[serde(rename = "runId")]
+        run_id: String,
+        estimated: u64,
+        budget: u64,
+    },
     Completed {
         #[serde(rename = "runId")]
         run_id: String,
@@ -104,6 +110,13 @@ pub struct TokenUsageSnapshot {
     session: TokenUsage,
 }
 
+/// Estimated token size of the retained conversation history and its budget.
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct ContextUsageSnapshot {
+    estimated: u64,
+    budget: u64,
+}
+
 impl TokenUsageSnapshot {
     fn record_cumulative(&mut self, next: &TokenUsage) {
         self.session.add_assign(&next.delta_from(&self.current));
@@ -129,6 +142,7 @@ impl AgentEvent {
             | Self::ToolFinished { run_id, .. }
             | Self::ToolRequest { run_id, .. }
             | Self::ToolProgress { run_id, .. }
+            | Self::ContextUsage { run_id, .. }
             | Self::Completed { run_id, .. }
             | Self::Cancelled { run_id }
             | Self::Error { run_id, .. } => run_id,
@@ -200,6 +214,9 @@ pub struct AgentSupervisor {
     file_attachment: Mutex<Option<FileAttachment>>,
     location_attachment: Mutex<Option<LocationAttachment>>,
     usage: Arc<Mutex<TokenUsageSnapshot>>,
+    context_usage: Arc<Mutex<ContextUsageSnapshot>>,
+    /// Conversation currently loaded into the sidecar, so switching reseeds it.
+    applied_conversation: Arc<Mutex<Option<String>>>,
 }
 
 pub fn key_status(store: &crate::secure_store::SecureStore) -> &'static str {
@@ -235,6 +252,13 @@ impl AgentSupervisor {
             .lock()
             .map(|usage| usage.clone())
             .map_err(|_| "Token 统计状态不可用".into())
+    }
+
+    pub fn context_usage_snapshot(&self) -> Result<ContextUsageSnapshot, String> {
+        self.context_usage
+            .lock()
+            .map(|usage| usage.clone())
+            .map_err(|_| "上下文统计状态不可用".into())
     }
 
     pub fn attach_file(&self, path: &std::path::Path) -> Result<String, String> {
@@ -371,6 +395,8 @@ impl AgentSupervisor {
         };
         let _ = app.emit("token-usage-changed", usage_snapshot);
 
+        self.seed_conversation(app, &key, &model, &search_proxy)?;
+
         let result = self.write_command(
             app,
             &key,
@@ -421,6 +447,44 @@ impl AgentSupervisor {
         }
     }
 
+    /// Loads the active conversation into the sidecar when it changed. The
+    /// sidecar keeps its own message list, so switching conversations must
+    /// reset it and replay the stored user/assistant text.
+    fn seed_conversation(
+        &self,
+        app: &tauri::AppHandle,
+        key: &str,
+        model: &str,
+        search_proxy: &str,
+    ) -> Result<(), String> {
+        let store = app.state::<crate::history::HistoryStore>();
+        let conversation_id = store.active_id()?;
+        let already_applied = self
+            .applied_conversation
+            .lock()
+            .map_err(|_| "会话状态不可用")?
+            .as_deref()
+            == Some(conversation_id.as_str());
+        if already_applied {
+            return Ok(());
+        }
+        let seed = store.seed()?;
+        self.write_command(
+            app,
+            key,
+            model,
+            search_proxy,
+            serde_json::json!({
+                "type": "conversation",
+                "conversationId": conversation_id,
+                "history": seed,
+            }),
+        )?;
+        *self.applied_conversation.lock().map_err(|_| "会话状态不可用")? =
+            Some(conversation_id);
+        Ok(())
+    }
+
     fn write_command(
         &self,
         app: &tauri::AppHandle,
@@ -439,6 +503,9 @@ impl AgentSupervisor {
         if restart {
             // An old reader must not report an intentional restart as a crash of the new run.
             self.generation.fetch_add(1, Ordering::SeqCst);
+            if let Ok(mut applied) = self.applied_conversation.lock() {
+                *applied = None;
+            }
             if let Some(mut old) = process.take() {
                 let _ = old.child.kill();
                 let _ = old.child.wait();
@@ -446,6 +513,9 @@ impl AgentSupervisor {
         }
         if process.is_none() {
             *process = Some(self.spawn_sidecar(app, key, model, search_proxy)?);
+            if let Ok(mut applied) = self.applied_conversation.lock() {
+                *applied = None;
+            }
         }
         let child = process.as_mut().ok_or("Agent 进程未运行")?;
         let line = command.to_string();
@@ -527,6 +597,8 @@ impl AgentSupervisor {
             .try_state::<crate::tools::ToolBroker>()
             .map(|state| state.inner().clone());
         let usage_totals = Arc::clone(&self.usage);
+        let context_usage_totals = Arc::clone(&self.context_usage);
+        let applied_conversation = Arc::clone(&self.applied_conversation);
         let supervisor_generation = Arc::clone(&self.generation);
         let my_generation = supervisor_generation.fetch_add(1, Ordering::SeqCst) + 1;
         std::thread::spawn(move || {
@@ -537,6 +609,19 @@ impl AgentSupervisor {
                 let Ok(event) = serde_json::from_str::<AgentEvent>(&line) else {
                     continue;
                 };
+                // Context usage is reported outside the active-run lifecycle (for
+                // example right after a run finishes), so handle it before the
+                // run filter and forward it to the UI.
+                if let AgentEvent::ContextUsage { estimated, budget, .. } = &event {
+                    if let Ok(mut snapshot) = context_usage_totals.lock() {
+                        *snapshot = ContextUsageSnapshot {
+                            estimated: *estimated,
+                            budget: *budget,
+                        };
+                        let _ = handle.emit("context-usage-changed", snapshot.clone());
+                    }
+                    continue;
+                }
                 let Ok(mut current) = active.lock() else {
                     break;
                 };
@@ -655,6 +740,9 @@ impl AgentSupervisor {
                 let _ = handle.emit("assistant-event", event);
             }
             if supervisor_generation.load(Ordering::SeqCst) == my_generation {
+                if let Ok(mut applied) = applied_conversation.lock() {
+                    *applied = None;
+                }
                 if let Ok(mut current) = active.lock() {
                     if let Some(run) = current.take() {
                         if let Some(broker) = broker.as_ref() {
@@ -754,6 +842,34 @@ mod tests {
         assert!(
             serde_json::from_str::<AgentEvent>(r#"{"type":"tool_started","runId":"r-1"}"#).is_err()
         );
+    }
+
+    #[test]
+    fn context_usage_snapshot_defaults_to_zero() {
+        let supervisor = AgentSupervisor::default();
+        let snapshot = supervisor.context_usage_snapshot().unwrap();
+        assert_eq!(snapshot.estimated, 0);
+        assert_eq!(snapshot.budget, 0);
+    }
+
+    #[test]
+    fn sidecar_context_usage_is_parsed() {
+        let parsed = serde_json::from_str::<AgentEvent>(
+            r#"{"type":"context_usage","runId":"r-1","estimated":1234,"budget":24000}"#,
+        )
+        .unwrap();
+        match parsed {
+            AgentEvent::ContextUsage {
+                run_id,
+                estimated,
+                budget,
+            } => {
+                assert_eq!(run_id, "r-1");
+                assert_eq!(estimated, 1234);
+                assert_eq!(budget, 24_000);
+            }
+            _ => panic!("expected context usage"),
+        }
     }
 
     #[test]

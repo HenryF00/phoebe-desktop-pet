@@ -109,6 +109,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .menu-usage-card small { color: var(--ui-muted); font-size: 9px; font-weight: 650; }
 .menu-usage-card strong { color: var(--ui-blue-strong); font-size: 13px; font-variant-numeric: tabular-nums; }
 .menu-usage-card em { grid-column: 1 / -1; color: var(--ui-muted); font-size: 9px; font-style: normal; font-variant-numeric: tabular-nums; }
+.menu-context { grid-column: 1 / -1; display: grid; gap: 4px; margin-top: 3px; }
+.menu-context-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+.menu-context-head small { color: var(--ui-muted); font-size: 9px; font-weight: 650; }
+.menu-context-head strong { color: var(--ui-blue-strong); font-size: 11px; font-variant-numeric: tabular-nums; }
+.menu-context.is-over .menu-context-head strong { color: var(--ui-danger); }
+.menu-context-bar { display: block; height: 4px; border-radius: 999px; background: color-mix(in srgb, var(--ui-blue) 16%, var(--ui-border)); overflow: hidden; }
+.menu-context-bar i { display: block; height: 100%; border-radius: inherit; background: var(--ui-blue); transition: width .25s ease; }
+.menu-context.is-over .menu-context-bar i { background: var(--ui-danger); }
 .menu-scale-grid { padding: 2px 4px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
 .pet-menu .menu-scale-grid button { min-width: 0; min-height: 44px; justify-content: center; padding: 0 2px; border: 1px solid transparent; border-radius: 8px; font-size: 10px; font-variant-numeric: tabular-nums; }
 .pet-menu .menu-scale-grid button.is-iconized-option { flex-direction: column; gap: 1px; font-size: 9px; }
@@ -164,12 +172,29 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .icon-button:hover, .composer-icon-button:hover, .composer-info-button:hover { color: var(--chat-primary-strong); background: var(--chat-surface-accent); }
 .icon-button:active, .composer-icon-button:active, .composer-info-button:active, .composer-action:active { transform: scale(.96); }
 .chat-popover { position: absolute; z-index: 40; border: 1px solid color-mix(in srgb, var(--chat-gold) 24%, var(--chat-border)); border-radius: 15px; background: var(--chat-surface); box-shadow: 0 14px 36px rgba(32,58,99,.17); color: var(--chat-text); }
-.header-menu { top: 49px; right: 42px; width: 190px; padding: 7px; }
+.header-menu { top: 49px; right: 42px; width: 232px; padding: 7px; }
 .menu-summary { display: flex; align-items: center; justify-content: space-between; padding: 9px 10px 10px; color: var(--chat-muted); font-size: 12px; border-bottom: 1px solid var(--chat-border); }
 .menu-summary strong { color: var(--chat-text); }
 .menu-row { width: 100%; min-height: 42px; margin-top: 5px; border: 0; border-radius: 9px; padding: 0 10px; text-align: left; background: transparent; color: var(--chat-text); font-size: 12px; font-weight: 650; }
 .menu-row:hover { background: var(--chat-surface-soft); }
 .menu-row.is-danger { color: var(--chat-danger); }
+.conversation-list { max-height: 210px; margin-top: 5px; padding-right: 2px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
+.conversation-list::-webkit-scrollbar { width: 6px; }
+.conversation-list::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 99px; background: color-mix(in srgb, var(--chat-muted) 28%, transparent); background-clip: padding-box; }
+.conversation-item { display: flex; align-items: center; gap: 2px; border-radius: 9px; padding: 2px 4px; }
+.conversation-item:hover { background: var(--chat-surface-soft); }
+.conversation-item.is-active { background: var(--chat-surface-accent); }
+.conversation-title { min-width: 0; flex: 1 1 auto; display: flex; align-items: center; gap: 6px; border: 0; border-radius: 7px; padding: 6px 4px; text-align: left; background: transparent; color: var(--chat-text); font-size: 12px; font-weight: 600; cursor: pointer; }
+.conversation-title:disabled { cursor: default; }
+.conversation-title-text { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-turn-count { flex: 0 0 auto; color: var(--chat-muted); font-size: 10.5px; font-weight: 500; }
+.conversation-icon-button { width: 26px; height: 26px; display: inline-grid; place-items: center; flex: 0 0 26px; border: 0; border-radius: 7px; padding: 0; color: var(--chat-muted); background: transparent; font-size: 13px; cursor: pointer; }
+.conversation-icon-button:hover { color: var(--chat-primary-strong); background: var(--chat-surface-accent); }
+.conversation-icon-button.is-danger:hover { color: var(--chat-danger); }
+.conversation-icon-button:disabled { opacity: .45; cursor: default; }
+.conversation-rename { display: flex; align-items: center; gap: 3px; flex: 1 1 auto; min-width: 0; }
+.conversation-rename input { min-width: 0; flex: 1 1 auto; border: 1px solid var(--chat-border); border-radius: 7px; padding: 5px 7px; background: var(--chat-surface); color: var(--chat-text); font-size: 12px; }
+.conversation-rename input:focus { outline: 2px solid color-mix(in srgb, var(--chat-gold) 55%, transparent); }
 .chat-body { flex: 1; min-height: 0; padding: 18px 18px 28px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; background: radial-gradient(circle at 88% 8%, rgba(193,156,109,.2), transparent 26%), radial-gradient(circle at 5% 88%, rgba(41,105,205,.12), transparent 32%), linear-gradient(90deg, rgba(255,253,248,.97) 0%, rgba(248,251,255,.92) 48%, rgba(244,249,255,.84) 100%), url("/pet/phoebe-chat-background.jpg") 64% center / cover no-repeat; }
 .chat-body::-webkit-scrollbar { width: 7px; }
 .chat-body::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 99px; background: color-mix(in srgb, var(--chat-muted) 28%, transparent); background-clip: padding-box; }

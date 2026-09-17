@@ -9,7 +9,7 @@ import { createAgentTools, selectAgentTools, SAFE_DEFAULT_TOOLS } from "./tools.
 import { inferReplyMotion } from "./motion.mjs";
 import { buildSpeechText } from "./speech.mjs";
 import { addTokenUsage, emptyTokenUsage } from "./usage.mjs";
-import { pruneMessages } from "./context.mjs";
+import { pruneMessages, estimateMessagesTokens, historyBudgetTokens } from "./context.mjs";
 import { describeFailure, lastAssistantMessage } from "./errors.mjs";
 
 // Only the Rust supervisor should launch this in production. No frontend IPC or local port.
@@ -28,6 +28,10 @@ let toolContext = null;
 const pendingTools = new Map();
 
 function send(event) { process.stdout.write(encodeEvent(event)); }
+
+function sendContextUsage(runId, messages) {
+  send({ type: "context_usage", runId, estimated: estimateMessagesTokens(messages), budget: historyBudgetTokens() });
+}
 
 function getAllAgentTools() {
   if (!agentTools) agentTools = createAgentTools({ getContext: () => toolContext });
@@ -136,6 +140,15 @@ async function handle(command) {
     }
     return;
   }
+  if (command.type === "conversation") {
+    if (active) { send({ type: "error", runId: command.conversationId, message: "另一轮对话仍在进行" }); return; }
+    getAgent().state.messages = command.history.map(entry => entry.role === "user"
+      ? { role: "user", content: entry.content, timestamp: Date.now() }
+      : { role: "assistant", content: [{ type: "text", text: entry.content }],
+          api: "openai-completions", provider: "deepseek", model: model.id,
+          usage: emptyTokenUsage(), stopReason: "stop", timestamp: Date.now() });
+    return;
+  }
   if (active) { send({ type: "error", runId: command.runId, message: "另一轮对话仍在进行" }); return; }
   if (!process.env.DEEPSEEK_API_KEY) {
     send({ type: "error", runId: command.runId, message: "DeepSeek API Key 尚未由桌面核心配置" });
@@ -160,7 +173,9 @@ async function handle(command) {
     const currentAgent = getAgent();
     currentAgent.state.systemPrompt = systemPromptFor(command.memories, command.interactionMode, allowed, command.folderGrants || []);
     currentAgent.state.tools = toolsForTurn(allowed);
-    currentAgent.state.messages = pruneMessages(currentAgent.state.messages);
+    const startingMessages = pruneMessages(currentAgent.state.messages);
+    currentAgent.state.messages = startingMessages;
+    sendContextUsage(run.runId, startingMessages);
     await currentAgent.prompt(command.text);
     if (run.timedOut) send({ type: "error", runId: run.runId, message: "模型回复超时；请重试" });
     else if (run.cancelled) send({ type: "cancelled", runId: run.runId });
@@ -186,7 +201,9 @@ async function handle(command) {
     clearTimeout(timeout);
     abortPending(run.runId);
     if (agent && !agent.state.isStreaming) {
-      agent.state.messages = command.file || command.location ? [] : pruneMessages(agent.state.messages);
+      const finalMessages = command.file || command.location ? [] : pruneMessages(agent.state.messages);
+      agent.state.messages = finalMessages;
+      sendContextUsage(run.runId, finalMessages);
     }
     active = null;
     toolContext = null;

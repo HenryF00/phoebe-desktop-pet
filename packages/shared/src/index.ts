@@ -23,10 +23,18 @@ export interface TokenUsage {
   totalTokens: number;
 }
 
+/** Estimated tokens of the retained conversation history against its budget. */
+export interface ContextUsage {
+  estimated: number;
+  budget: number;
+}
+
 export type ToolName =
   | "get_current_time" | "get_system_status" | "web_search" | "read_selected_file" | "get_device_location" | "launch_wuthering_waves"
   | "launch_application" | "open_url" | "focus_application"
   | "list_granted_folders" | "list_directory" | "read_text_file" | "search_files"
+  | "write_file" | "move_file" | "delete_file"
+  | "list_installed_apps" | "reveal_file" | "open_file_with_application"
   | "remember_preference" | "forget_preference";
 
 export interface ToolCall {

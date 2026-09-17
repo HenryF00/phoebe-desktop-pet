@@ -82,6 +82,27 @@ struct DeleteFileArgs {
     relative_path: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AppIdArgs {
+    app_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RevealFileArgs {
+    grant_id: String,
+    relative_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OpenFileWithApplicationArgs {
+    grant_id: String,
+    relative_path: String,
+    app_id: String,
+}
+
 #[derive(Debug)]
 pub enum Parsed {
     Empty,
@@ -93,6 +114,11 @@ pub enum Parsed {
     WriteFile { grant_id: String, relative_path: String, content: String, create_only: bool },
     MoveFile { grant_id: String, from_path: String, to_path: String },
     DeleteFile { grant_id: String, relative_path: String },
+    ListInstalledApps,
+    LaunchApplication { app_id: String },
+    FocusApplication { app_id: String },
+    RevealFile { grant_id: String, relative_path: String },
+    OpenFileWithApplication { grant_id: String, relative_path: String, app_id: String },
 }
 
 /// Description shown to the human in the approval dialog. Never sent to the model.
@@ -121,6 +147,11 @@ pub enum Tool {
     WriteFile,
     MoveFile,
     DeleteFile,
+    ListInstalledApps,
+    LaunchApplication,
+    FocusApplication,
+    RevealFile,
+    OpenFileWithApplication,
 }
 
 const MAX_READ_BYTES: u64 = 32 * 1024;
@@ -148,6 +179,11 @@ impl Tool {
             "write_file" => Some(Self::WriteFile),
             "move_file" => Some(Self::MoveFile),
             "delete_file" => Some(Self::DeleteFile),
+            "list_installed_apps" => Some(Self::ListInstalledApps),
+            "launch_application" => Some(Self::LaunchApplication),
+            "focus_application" => Some(Self::FocusApplication),
+            "reveal_file" => Some(Self::RevealFile),
+            "open_file_with_application" => Some(Self::OpenFileWithApplication),
             _ => None,
         }
     }
@@ -164,6 +200,11 @@ impl Tool {
             Self::WriteFile => "write_file",
             Self::MoveFile => "move_file",
             Self::DeleteFile => "delete_file",
+            Self::ListInstalledApps => "list_installed_apps",
+            Self::LaunchApplication => "launch_application",
+            Self::FocusApplication => "focus_application",
+            Self::RevealFile => "reveal_file",
+            Self::OpenFileWithApplication => "open_file_with_application",
         }
     }
 
@@ -171,7 +212,10 @@ impl Tool {
     pub fn is_auto(&self) -> bool {
         matches!(
             self,
-            Self::GetCurrentTime | Self::GetSystemStatus | Self::ListGrantedFolders
+            Self::GetCurrentTime
+                | Self::GetSystemStatus
+                | Self::ListGrantedFolders
+                | Self::ListInstalledApps
         )
     }
 
@@ -270,6 +314,42 @@ impl Tool {
                     relative_path: validate_non_empty_relative(&parsed.relative_path)?,
                 })
             }
+            Self::ListInstalledApps => {
+                serde_json::from_value::<EmptyArgs>(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                Ok(Parsed::ListInstalledApps)
+            }
+            Self::LaunchApplication => {
+                let parsed: AppIdArgs = serde_json::from_value(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                Ok(Parsed::LaunchApplication {
+                    app_id: validate_app_id(&parsed.app_id)?,
+                })
+            }
+            Self::FocusApplication => {
+                let parsed: AppIdArgs = serde_json::from_value(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                Ok(Parsed::FocusApplication {
+                    app_id: validate_app_id(&parsed.app_id)?,
+                })
+            }
+            Self::RevealFile => {
+                let parsed: RevealFileArgs = serde_json::from_value(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                Ok(Parsed::RevealFile {
+                    grant_id: validate_grant_id(&parsed.grant_id)?,
+                    relative_path: validate_non_empty_relative(&parsed.relative_path)?,
+                })
+            }
+            Self::OpenFileWithApplication => {
+                let parsed: OpenFileWithApplicationArgs = serde_json::from_value(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                Ok(Parsed::OpenFileWithApplication {
+                    grant_id: validate_grant_id(&parsed.grant_id)?,
+                    relative_path: validate_non_empty_relative(&parsed.relative_path)?,
+                    app_id: validate_app_id(&parsed.app_id)?,
+                })
+            }
         }
     }
 
@@ -282,7 +362,12 @@ impl Tool {
             | Parsed::SearchFiles { grant_id, .. }
             | Parsed::WriteFile { grant_id, .. }
             | Parsed::MoveFile { grant_id, .. }
-            | Parsed::DeleteFile { grant_id, .. } => Some(format!("folder:{grant_id}")),
+            | Parsed::DeleteFile { grant_id, .. }
+            | Parsed::RevealFile { grant_id, .. }
+            | Parsed::OpenFileWithApplication { grant_id, .. } => Some(format!("folder:{grant_id}")),
+            Parsed::LaunchApplication { app_id } | Parsed::FocusApplication { app_id } => {
+                Some(format!("app:{app_id}"))
+            }
             _ => None,
         }
     }
@@ -291,7 +376,9 @@ impl Tool {
         match parsed {
             Parsed::ListDirectory { grant_id, .. }
             | Parsed::ReadTextFile { grant_id, .. }
-            | Parsed::SearchFiles { grant_id, .. } => Some(GrantRequirement {
+            | Parsed::SearchFiles { grant_id, .. }
+            | Parsed::RevealFile { grant_id, .. }
+            | Parsed::OpenFileWithApplication { grant_id, .. } => Some(GrantRequirement {
                 grant_id: grant_id.clone(),
                 write: false,
             }),
@@ -303,6 +390,20 @@ impl Tool {
             }),
             _ => None,
         }
+    }
+
+    /// The opaque application id a tool needs resolved from the catalog.
+    pub fn required_app<'a>(&self, parsed: &'a Parsed) -> Option<&'a str> {
+        match parsed {
+            Parsed::LaunchApplication { app_id }
+            | Parsed::FocusApplication { app_id }
+            | Parsed::OpenFileWithApplication { app_id, .. } => Some(app_id),
+            _ => None,
+        }
+    }
+
+    pub fn is_app_listing(&self) -> bool {
+        matches!(self, Self::ListInstalledApps)
     }
 
     /// Human-readable target and impact shown in the approval dialog.
@@ -403,6 +504,44 @@ impl Tool {
                     preview: None,
                 })
             }
+            (Self::ListInstalledApps, _) => Ok(Describe {
+                target: "已安装应用".to_owned(),
+                impact: "列出应用名称与标识（只读，不启动）".to_owned(),
+                preview: None,
+            }),
+            (Self::LaunchApplication, _) | (Self::FocusApplication, _) => {
+                let entry = ctx.selected_app.as_ref().ok_or("未找到该应用")?;
+                let verb = if matches!(self, Self::FocusApplication) { "激活" } else { "启动" };
+                Ok(Describe {
+                    target: entry.name.clone(),
+                    impact: format!("{verb}应用：{}（{}）", entry.name, entry.path),
+                    preview: None,
+                })
+            }
+            (Self::RevealFile, Parsed::RevealFile { relative_path, .. }) => {
+                let path = resolve_read(ctx, relative_path)?;
+                Ok(Describe {
+                    target: path.display().to_string(),
+                    impact: format!(
+                        "在文件管理器中显示（相对路径 {}）",
+                        display_relative(relative_path)
+                    ),
+                    preview: None,
+                })
+            }
+            (Self::OpenFileWithApplication, Parsed::OpenFileWithApplication { relative_path, .. }) => {
+                let path = resolve_read(ctx, relative_path)?;
+                let entry = ctx.selected_app.as_ref().ok_or("未找到该应用")?;
+                Ok(Describe {
+                    target: path.display().to_string(),
+                    impact: format!(
+                        "用 {} 打开（相对路径 {}）",
+                        entry.name,
+                        display_relative(relative_path)
+                    ),
+                    preview: None,
+                })
+            }
             _ => Err("工具参数不匹配".to_owned()),
         }
     }
@@ -461,6 +600,16 @@ impl Tool {
             (Self::DeleteFile, Parsed::DeleteFile { relative_path, .. }) => {
                 delete_to_trash(ctx, relative_path)
             }
+            (Self::ListInstalledApps, _) => Ok(ToolOutcome::success(
+                serde_json::to_string(&ctx.installed_apps).unwrap_or_else(|_| "[]".to_owned()),
+            )),
+            (Self::LaunchApplication, _) | (Self::FocusApplication, _) => open_application(ctx, self),
+            (Self::RevealFile, Parsed::RevealFile { relative_path, .. }) => {
+                reveal_file(ctx, relative_path)
+            }
+            (Self::OpenFileWithApplication, Parsed::OpenFileWithApplication { relative_path, .. }) => {
+                open_file_with_application(ctx, relative_path)
+            }
             _ => Err("工具参数不匹配".to_owned()),
         }
     }
@@ -497,6 +646,18 @@ fn validate_grant_id(value: &str) -> Result<String, String> {
         return Err("目录授权标识无效".to_owned());
     }
     Ok(value.to_ascii_lowercase())
+}
+
+fn validate_app_id(value: &str) -> Result<String, String> {
+    if value.is_empty()
+        || value.len() > 200
+        || !value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return Err("应用标识无效".to_owned());
+    }
+    Ok(value.to_owned())
 }
 
 fn validate_relative(value: &str) -> Result<String, String> {
@@ -919,6 +1080,113 @@ fn is_text_name(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn open_application(ctx: &ToolContext, tool: &Tool) -> Result<ToolOutcome, String> {
+    let entry = ctx.selected_app.as_ref().ok_or("未找到该应用")?;
+    spawn_open(&entry.path)?;
+    Ok(ToolOutcome::success(format!(
+        "已{}应用：{}",
+        if matches!(tool, Tool::FocusApplication) { "激活" } else { "启动" },
+        entry.name
+    )))
+}
+
+fn reveal_file(ctx: &ToolContext, relative_path: &str) -> Result<ToolOutcome, String> {
+    let folder = ctx.folder.as_ref().ok_or("该目录尚未授权")?;
+    let path = resolve_read(ctx, relative_path)?;
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("/usr/bin/open")
+            .arg("-R")
+            .arg(&path)
+            .spawn()
+            .map_err(|_| "无法在文件管理器中显示".to_owned())?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(format!("/select,{}", path.display()))
+            .spawn()
+            .map_err(|_| "无法在文件管理器中显示".to_owned())?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let parent = path.parent().unwrap_or(&path);
+        std::process::Command::new("xdg-open")
+            .arg(parent)
+            .spawn()
+            .map_err(|_| "无法在文件管理器中显示".to_owned())?;
+    }
+    Ok(ToolOutcome::success(format!(
+        "已在文件管理器中显示：{}/{}",
+        folder.label,
+        display_relative(relative_path)
+    )))
+}
+
+fn open_file_with_application(ctx: &ToolContext, relative_path: &str) -> Result<ToolOutcome, String> {
+    let folder = ctx.folder.as_ref().ok_or("该目录尚未授权")?;
+    let entry = ctx.selected_app.as_ref().ok_or("未找到该应用")?;
+    let path = resolve_read(ctx, relative_path)?;
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("/usr/bin/open")
+            .arg("-a")
+            .arg(&entry.path)
+            .arg(&path)
+            .spawn()
+            .map_err(|_| "无法用该应用打开文件".to_owned())?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new(&entry.path)
+            .arg(&path)
+            .spawn()
+            .map_err(|_| "无法用该应用打开文件".to_owned())?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|_| "无法用该应用打开文件".to_owned())?;
+    }
+    Ok(ToolOutcome::success(format!(
+        "已用 {} 打开：{}/{}",
+        entry.name,
+        folder.label,
+        display_relative(relative_path)
+    )))
+}
+
+/// Opens a path with the platform's default handler using a fixed program and
+/// an argument array; no shell is involved.
+#[cfg(target_os = "macos")]
+fn spawn_open(path: &str) -> Result<(), String> {
+    std::process::Command::new("/usr/bin/open")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| "无法打开该系统目标".to_owned())
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_open(path: &str) -> Result<(), String> {
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "", path])
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| "无法打开该系统目标".to_owned())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn spawn_open(path: &str) -> Result<(), String> {
+    std::process::Command::new("xdg-open")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| "无法打开该系统目标".to_owned())
+}
+
 /// Launches the default handler for a validated HTTPS URL. No shell is used,
 /// and the URL is passed as a single argument.
 fn open_https(url: &str) -> Result<ToolOutcome, String> {
@@ -1028,6 +1296,31 @@ mod tests {
             .parse(&json!({ "grantId": grant, "relativePath": "", "query": "note", "maxResults": 9999 }))
             .unwrap();
         assert!(matches!(parsed, Parsed::SearchFiles { max_results: 50, .. }));
+    }
+
+    #[test]
+    fn app_tools_validate_ids_and_scope() {
+        let app_id = "app-0123456789abcdef";
+        assert!(Tool::LaunchApplication.parse(&json!({ "appId": app_id })).is_ok());
+        assert!(Tool::LaunchApplication.parse(&json!({ "appId": "../evil" })).is_err());
+        assert!(Tool::LaunchApplication
+            .parse(&json!({ "appId": app_id, "path": "/Applications/X.app" }))
+            .is_err());
+        let parsed = Tool::LaunchApplication.parse(&json!({ "appId": app_id })).unwrap();
+        assert_eq!(Tool::LaunchApplication.required_app(&parsed), Some(app_id));
+        assert_eq!(
+            Tool::LaunchApplication.bound_key(&parsed).as_deref(),
+            Some("app:app-0123456789abcdef")
+        );
+        assert!(Tool::ListInstalledApps.is_auto());
+        assert!(Tool::ListInstalledApps.is_app_listing());
+        assert!(!Tool::LaunchApplication.is_app_listing());
+
+        let reveal = Tool::RevealFile
+            .parse(&json!({ "grantId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "relativePath": "a.txt" }))
+            .unwrap();
+        assert!(!Tool::RevealFile.required_grant(&reveal).unwrap().write);
+        assert!(Tool::RevealFile.required_app(&reveal).is_none());
     }
 
     #[test]

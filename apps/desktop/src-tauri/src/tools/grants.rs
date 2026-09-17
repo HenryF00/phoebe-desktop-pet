@@ -14,6 +14,7 @@ use tauri::{AppHandle, Manager};
 
 pub const MAX_DOMAINS: usize = 200;
 pub const MAX_FOLDERS: usize = 100;
+pub const MAX_APPS: usize = 200;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FolderGrant {
@@ -43,6 +44,8 @@ pub struct Grants {
     #[serde(default)]
     domains: BTreeSet<String>,
     #[serde(default)]
+    apps: BTreeSet<String>,
+    #[serde(default)]
     folders: Vec<FolderGrant>,
 }
 
@@ -59,11 +62,14 @@ impl Grants {
         }
     }
 
-    /// Checks a trust key. Domain keys require an exact match; folder keys
-    /// require an existing grant with read permission.
+    /// Checks a trust key. Domain and application keys require an exact match;
+    /// folder keys require an existing grant with read permission.
     pub fn contains(&self, key: &str) -> bool {
         if let Some(domain) = key.strip_prefix("domain:") {
             return self.domains.contains(domain);
+        }
+        if let Some(app_id) = key.strip_prefix("app:") {
+            return self.apps.contains(app_id);
         }
         if let Some(id) = key.strip_prefix("folder:") {
             return self.folders.iter().any(|folder| folder.id == id && folder.read);
@@ -71,15 +77,21 @@ impl Grants {
         false
     }
 
-    /// Only domain keys are added here; folders use [`Self::add_folder`].
+    /// Adds a domain or application trust key. Folders use [`Self::add_folder`].
     pub fn insert(&mut self, key: &str) -> bool {
-        let Some(domain) = key.strip_prefix("domain:") else {
-            return false;
-        };
-        if self.domains.len() >= MAX_DOMAINS {
-            return false;
+        if let Some(domain) = key.strip_prefix("domain:") {
+            if self.domains.len() >= MAX_DOMAINS {
+                return false;
+            }
+            return self.domains.insert(domain.to_owned());
         }
-        self.domains.insert(domain.to_owned())
+        if let Some(app_id) = key.strip_prefix("app:") {
+            if self.apps.len() >= MAX_APPS {
+                return false;
+            }
+            return self.apps.insert(app_id.to_owned());
+        }
+        false
     }
 
     pub fn folder(&self, id: &str) -> Option<&FolderGrant> {
@@ -179,6 +191,10 @@ mod tests {
         assert!(!grants.insert("folder:/etc"));
         assert!(grants.contains("domain:example.com"));
         assert!(!grants.contains("domain:evil.example"));
+
+        assert!(grants.insert("app:app-0123456789abcdef"));
+        assert!(grants.contains("app:app-0123456789abcdef"));
+        assert!(!grants.contains("app:app-ffffffffffffffff"));
 
         assert!(grants.add_folder("/Users/me/Notes", "Notes", true, false).is_ok());
         let id = grants.summaries()[0].grant_id.clone();

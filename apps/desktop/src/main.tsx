@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { ActionMode, ApprovalDecision, ApprovalRequest, AssistantEvent, AssistantReply, AuditEntry, FolderGrantView, SystemStatus, TokenUsage, ToolResult } from "@phoebe/shared";
+import type { ActionMode, ApprovalDecision, ApprovalRequest, AssistantEvent, AssistantReply, AuditEntry, ContextUsage, FolderGrantView, SystemStatus, TokenUsage, ToolResult } from "@phoebe/shared";
 import { MemorySection } from "./MemorySection";
 import { selectPetClip, usePetAnimation, useReducedMotion } from "./petAnimation";
 import "./style.css";
@@ -33,6 +33,8 @@ type ChatEntry = {
 type AgentTextEvent = Extract<AssistantEvent, { type: "state" | "text_delta" | "tool_started" | "tool_finished" | "completed" | "cancelled" | "error" }>;
 type HistoryTurn = { runId: string; question: string; answer: string };
 type HistoryOutcome = { runId: string; status: "saved" | "private" | "failed" };
+type Conversation = { id: string; title: string; updatedAt: string; turnCount: number };
+type ActiveConversation = { conversation: Conversation; turns: HistoryTurn[] };
 
 type InteractionMode = "assistant" | "chat";
 type DesktopSettings = { version: number; model: string; privacy_mode: boolean; search_proxy: string; voice_enabled: boolean; interaction_mode: InteractionMode; action_mode: ActionMode; pet_scale_percent: number };
@@ -53,6 +55,7 @@ const defaultSettings: DesktopSettings = { version: 1, model: "deepseek-v4-flash
 const defaultQuickPreferences: QuickPreferences = { interaction_mode: "assistant", voice_enabled: true, pet_scale_percent: 100 };
 const emptyTokenUsage: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 };
 const defaultTokenUsage: TokenUsageSnapshot = { current: emptyTokenUsage, session: emptyTokenUsage };
+const defaultContextUsage: ContextUsage = { estimated: 0, budget: 24_000 };
 const PET_SCALE_PRESETS = [
   { value: 0, label: "图标" },
   { value: 75, label: "75%" },
@@ -64,6 +67,10 @@ const AUTO_WAVE_IDLE_MS = 120_000;
 
 function formatTokenCount(value: number) {
   return new Intl.NumberFormat("zh-CN", { notation: value >= 10_000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value);
+}
+
+function formatContextCount(value: number) {
+  return value >= 1000 ? `${(value / 1000).toFixed(value % 1000 === 0 ? 0 : 1)}k` : String(value);
 }
 
 type IconProps = React.SVGProps<SVGSVGElement>;
@@ -108,6 +115,9 @@ const toolLabels: Record<string, string> = {
   write_file: "写入文件",
   move_file: "移动文件",
   delete_file: "删除到废纸篓",
+  list_installed_apps: "查看已安装应用",
+  reveal_file: "在文件管理器中显示",
+  open_file_with_application: "用指定应用打开",
   launch_wuthering_waves: "启动应用",
   launch_application: "启动应用",
   open_url: "打开链接",
@@ -459,6 +469,11 @@ function ChatApp() {
   const [savedHistoryCount, setSavedHistoryCount] = React.useState(0);
   const [historyNotice, setHistoryNotice] = React.useState("");
   const [historyBusy, setHistoryBusy] = React.useState(false);
+  const [conversations, setConversations] = React.useState<Conversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = React.useState<string | null>(null);
+  const [conversationBusy, setConversationBusy] = React.useState(false);
+  const [renamingId, setRenamingId] = React.useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = React.useState("");
   const [headerMenuOpen, setHeaderMenuOpen] = React.useState(false);
   const [toolMenuOpen, setToolMenuOpen] = React.useState(false);
   const [privacyOpen, setPrivacyOpen] = React.useState(false);
@@ -491,21 +506,26 @@ function ChatApp() {
     let unlistenHistory: (() => void) | null = null;
     let unlistenVoice: (() => void) | null = null;
     let unlistenApproval: (() => void) | null = null;
-    void invoke<HistoryTurn[]>("get_recent_history").then(turns => {
+    void invoke<Conversation[]>("list_conversations").then(list => {
+      if (!disposed) setConversations(list);
+    }).catch(() => {});
+    void invoke<ActiveConversation>("get_active_conversation").then(active => {
       if (disposed) return;
-      setSavedHistoryCount(turns.length);
-      setMessages(current => {
-        const existing = new Set(current.map(entry => entry.runId));
-        return [...turns.filter(turn => !existing.has(turn.runId)).map(turn => ({
-          runId: turn.runId, question: turn.question, answer: turn.answer,
-          phase: "completed" as const, fromHistory: true,
-        })), ...current];
-      });
+      setActiveConversationId(active.conversation.id);
+      setSavedHistoryCount(active.turns.length);
+      setMessages(active.turns.map(turn => ({
+        runId: turn.runId, question: turn.question, answer: turn.answer,
+        phase: "completed" as const, fromHistory: true,
+      })));
       setHistoryLoading(false);
     }).catch(() => { if (!disposed) { setHistoryNotice("本机历史暂不可读取；请检查应用数据目录。对话仍可继续。"); setHistoryLoading(false); } });
     void listen<HistoryOutcome>("history-event", event => {
       const outcome = event.payload;
-      if (outcome.status === "saved") { setSavedHistoryCount(current => current + 1); setHistoryNotice("本轮文字对话已保存到本机历史。"); }
+      if (outcome.status === "saved") {
+        setSavedHistoryCount(current => current + 1);
+        setHistoryNotice("本轮文字对话已保存到本机历史。");
+        void invoke<Conversation[]>("list_conversations").then(list => { if (!disposed) setConversations(list); }).catch(() => {});
+      }
       else if (outcome.status === "private") setHistoryNotice("隐私模式：本轮对话只保留在内存中。");
       else setHistoryNotice("本轮对话未能保存到本机历史；请检查应用数据目录。");
     }).then(fn => { if (disposed) fn(); else unlistenHistory = fn; });
@@ -694,11 +714,87 @@ function ChatApp() {
     try {
       const cleared = await invoke<boolean>("clear_chat_history");
       if (!cleared) { setHistoryNotice("已取消清理；本机历史保持不变。"); return; }
-      setMessages(current => current.filter(entry => entry.phase !== "completed"));
+      setMessages([]);
       setSavedHistoryCount(0);
-      setHistoryNotice("本机已保存的文字聊天历史已清理；此操作无法在应用内撤销。");
+      await refreshConversations();
+      setHistoryNotice("当前会话已保存的文字聊天历史已清理；此操作无法在应用内撤销。");
     } catch { setHistoryNotice("清理失败，原历史保持不变。请检查应用数据目录权限后重试。"); }
     finally { setHistoryBusy(false); }
+  }
+
+  function applyActiveConversation(active: ActiveConversation) {
+    setActiveConversationId(active.conversation.id);
+    setSavedHistoryCount(active.turns.length);
+    setMessages(active.turns.map(turn => ({
+      runId: turn.runId, question: turn.question, answer: turn.answer,
+      phase: "completed" as const, fromHistory: true,
+    })));
+    setRenamingId(null);
+  }
+
+  async function refreshConversations() {
+    try { setConversations(await invoke<Conversation[]>("list_conversations")); } catch { /* keep the previous list */ }
+  }
+
+  async function newConversation() {
+    if (!inTauri || conversationBusy || activeRunId) return;
+    setConversationBusy(true); setHistoryNotice("");
+    setHeaderMenuOpen(false);
+    try {
+      const active = await invoke<ActiveConversation>("create_conversation");
+      setDraft("");
+      applyActiveConversation(active);
+      await refreshConversations();
+      setHistoryNotice("已新建会话；旧会话仍可在会话列表中切换。");
+    } catch { setHistoryNotice("新建会话失败，请重试。"); }
+    finally { setConversationBusy(false); }
+  }
+
+  async function switchConversation(id: string) {
+    if (!inTauri || conversationBusy || activeRunId || id === activeConversationId) return;
+    setConversationBusy(true); setHistoryNotice("");
+    try {
+      const active = await invoke<ActiveConversation>("switch_conversation", { id });
+      setDraft("");
+      applyActiveConversation(active);
+      await refreshConversations();
+      setHeaderMenuOpen(false);
+    } catch { setHistoryNotice("切换会话失败，请重试。"); }
+    finally { setConversationBusy(false); }
+  }
+
+  async function deleteConversation(conversation: Conversation) {
+    if (!inTauri || conversationBusy || activeRunId) return;
+    setConversationBusy(true); setHistoryNotice("");
+    try {
+      const active = await invoke<ActiveConversation>("delete_conversation", { id: conversation.id });
+      applyActiveConversation(active);
+      await refreshConversations();
+      setHistoryNotice("会话已删除。");
+    } catch { setHistoryNotice("删除会话失败；原会话保持不变。"); }
+    finally { setConversationBusy(false); }
+  }
+
+  function startRename(conversation: Conversation) {
+    setRenamingId(conversation.id);
+    setRenameDraft(conversation.title);
+  }
+
+  async function saveRename(id: string) {
+    const title = renameDraft.trim();
+    if (!title) { setRenamingId(null); return; }
+    if (!inTauri || conversationBusy) return;
+    setConversationBusy(true); setHistoryNotice("");
+    try {
+      await invoke("rename_conversation", { id, title });
+      await refreshConversations();
+    } catch { setHistoryNotice("重命名会话失败，请重试。"); }
+    finally { setConversationBusy(false); setRenamingId(null); }
+  }
+
+  function cancelRename() {
+    setRenamingId(null);
+    setRenameDraft("");
   }
 
   async function chooseFolder(writable: boolean) {
@@ -826,6 +922,42 @@ function ChatApp() {
         <div className="chat-header-actions">
           <button className="icon-button" type="button" onClick={() => { setHeaderMenuOpen(value => !value); setToolMenuOpen(false); setPrivacyOpen(false); }} aria-label="更多聊天选项" aria-expanded={headerMenuOpen}><MoreIcon /></button>
           {headerMenuOpen && <div className="chat-popover header-menu">
+            <div className="menu-summary"><span>会话</span><strong>{conversationBusy ? "处理中…" : `${conversations.length} 个`}</strong></div>
+            <button type="button" className="menu-row" onClick={() => void newConversation()} disabled={!inTauri || conversationBusy || Boolean(activeRunId)}>新建对话</button>
+            {conversations.length > 0 && <div className="conversation-list" role="list" aria-label="会话列表">
+              {conversations.map(conversation => (
+                <div key={conversation.id} className={`conversation-item${conversation.id === activeConversationId ? " is-active" : ""}`} role="listitem">
+                  {renamingId === conversation.id ? (
+                    <div className="conversation-rename">
+                      <input
+                        autoFocus
+                        value={renameDraft}
+                        maxLength={60}
+                        placeholder="会话标题"
+                        onChange={event => setRenameDraft(event.target.value)}
+                        onKeyDown={event => {
+                          if (event.key === "Enter") { event.preventDefault(); void saveRename(conversation.id); }
+                          else if (event.key === "Escape") { event.preventDefault(); cancelRename(); }
+                        }}
+                        aria-label="重命名会话"
+                      />
+                      <button type="button" className="conversation-icon-button" onClick={() => void saveRename(conversation.id)} aria-label="保存标题">✓</button>
+                    </div>
+                  ) : (
+                    <>
+                      <button type="button" className="conversation-title" onClick={() => void switchConversation(conversation.id)}
+                        disabled={conversationBusy || Boolean(activeRunId)}
+                        title={conversation.title || "（未命名会话）"}>
+                        <span className="conversation-title-text">{conversation.title || "（未命名会话）"}</span>
+                        <span className="conversation-turn-count">{conversation.turnCount} 轮</span>
+                      </button>
+                      <button type="button" className="conversation-icon-button" onClick={() => startRename(conversation)} aria-label="重命名" title="重命名" disabled={conversationBusy || Boolean(activeRunId)}>✎</button>
+                      <button type="button" className="conversation-icon-button is-danger" onClick={() => void deleteConversation(conversation)} aria-label="删除" title="删除" disabled={conversationBusy || Boolean(activeRunId)}>✕</button>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>}
             <div className="menu-summary"><span>本机历史</span><strong>{historyLoading ? "读取中…" : `${savedHistoryCount} 条`}</strong></div>
             <button type="button" className="menu-row is-danger" onClick={() => { setHeaderMenuOpen(false); void clearHistory(); }} disabled={!inTauri || historyLoading || historyBusy || Boolean(activeRunId) || savedHistoryCount === 0}>{historyBusy ? "正在清理…" : "清理聊天历史"}</button>
             <button type="button" className="menu-row is-danger" onClick={() => { setHeaderMenuOpen(false); void panicStop(); }} disabled={!inTauri}>{approval ? "拒绝并停止所有操作" : "立即停止所有操作"}</button>
@@ -950,6 +1082,7 @@ type QuickMenuProps = {
   chatVisible: boolean;
   preferences: QuickPreferences;
   usage: TokenUsageSnapshot;
+  contextUsage: ContextUsage;
   preferenceBusy?: boolean;
   firstItem: React.RefObject<HTMLButtonElement | null>;
   onMode: (mode: InteractionMode) => void;
@@ -963,7 +1096,7 @@ type QuickMenuProps = {
   onClose: () => void;
 };
 
-function QuickMenu({ chatVisible, preferences, usage, preferenceBusy = false, firstItem, onMode, onVoice, onScale, onChat, onWave, onSettings, onHide, onQuit, onClose }: QuickMenuProps) {
+function QuickMenu({ chatVisible, preferences, usage, contextUsage, preferenceBusy = false, firstItem, onMode, onVoice, onScale, onChat, onWave, onSettings, onHide, onQuit, onClose }: QuickMenuProps) {
   const voiceLabel = !preferences.voice_enabled
     ? "语音：关闭"
     : preferences.interaction_mode === "assistant" ? "语音：精简播报" : "语音：完整朗读";
@@ -995,6 +1128,10 @@ function QuickMenu({ chatVisible, preferences, usage, preferenceBusy = false, fi
       <span><small>本轮</small><strong>{formatTokenCount(usage.current.totalTokens)}</strong></span>
       <span><small>本次启动</small><strong>{formatTokenCount(usage.session.totalTokens)}</strong></span>
       <em>输入 {formatTokenCount(usage.current.input)} · 输出 {formatTokenCount(usage.current.output)}</em>
+      <div className={`menu-context${contextUsage.estimated >= contextUsage.budget ? " is-over" : ""}`} role="status" aria-label={`上下文占用 ${contextUsage.estimated} / ${contextUsage.budget} Token`}>
+        <span className="menu-context-head"><small>上下文</small><strong>{formatContextCount(contextUsage.estimated)} / {formatContextCount(contextUsage.budget)}</strong></span>
+        <span className="menu-context-bar" aria-hidden="true"><i style={{ width: `${Math.min(100, Math.round(contextUsage.estimated / Math.max(1, contextUsage.budget) * 100))}%` }} /></span>
+      </div>
     </div>
     <span className="menu-section-label">桌宠大小</span>
     <div className="menu-scale-grid" role="group" aria-label="桌宠显示大小">
@@ -1019,6 +1156,7 @@ function MenuApp() {
   const [chatVisible, setChatVisible] = React.useState(false);
   const [preferences, setPreferences] = React.useState<QuickPreferences>(defaultQuickPreferences);
   const [usage, setUsage] = React.useState<TokenUsageSnapshot>(defaultTokenUsage);
+  const [contextUsage, setContextUsage] = React.useState<ContextUsage>(defaultContextUsage);
   const [preferenceBusy, setPreferenceBusy] = React.useState(false);
   const [error, setError] = React.useState("");
   const firstItem = React.useRef<HTMLButtonElement>(null);
@@ -1038,6 +1176,9 @@ function MenuApp() {
       void invoke<TokenUsageSnapshot>("get_token_usage").then(value => {
         if (!disposed) setUsage(value);
       }).catch(() => { if (!disposed) setError("无法读取 Token 用量"); });
+      void invoke<ContextUsage>("get_context_usage").then(value => {
+        if (!disposed) setContextUsage(value);
+      }).catch(() => {});
     };
     refresh();
     void listen<boolean>("pet-menu-visibility", event => {
@@ -1045,6 +1186,8 @@ function MenuApp() {
       setError(""); refresh(); firstItem.current?.focus();
     }).then(fn => { if (disposed) fn(); else cleanups.push(fn); });
     void listen<TokenUsageSnapshot>("token-usage-changed", event => setUsage(event.payload))
+      .then(fn => { if (disposed) fn(); else cleanups.push(fn); });
+    void listen<ContextUsage>("context-usage-changed", event => setContextUsage(event.payload))
       .then(fn => { if (disposed) fn(); else cleanups.push(fn); });
     void listen<QuickPreferences>("quick-preferences-changed", event => setPreferences(event.payload))
       .then(fn => { if (disposed) fn(); else cleanups.push(fn); });
@@ -1088,7 +1231,7 @@ function MenuApp() {
   return <main className="menu-shell" onKeyDown={event => {
     if (event.key === "Escape") { event.stopPropagation(); void invoke("hide_pet_menu", { returnFocus: true }); }
   }}>
-    <QuickMenu chatVisible={chatVisible} preferences={preferences} usage={usage} preferenceBusy={preferenceBusy} firstItem={firstItem}
+    <QuickMenu chatVisible={chatVisible} preferences={preferences} usage={usage} contextUsage={contextUsage} preferenceBusy={preferenceBusy} firstItem={firstItem}
       onMode={mode => void updatePreferences({ ...preferences, interaction_mode: mode })}
       onVoice={() => void updatePreferences({ ...preferences, voice_enabled: !preferences.voice_enabled })}
       onScale={percent => void updateScale(percent)}
@@ -1336,7 +1479,7 @@ function PetApp() {
           <img className="pet-animation-frame" src={petAnimation.src} alt="" draggable={false} />
         </span>
       </button>
-      {menuOpen && <QuickMenu chatVisible={chatVisible} preferences={preferences} usage={defaultTokenUsage} firstItem={firstMenuItem}
+      {menuOpen && <QuickMenu chatVisible={chatVisible} preferences={preferences} usage={defaultTokenUsage} contextUsage={defaultContextUsage} firstItem={firstMenuItem}
         onMode={mode => void updatePreferences({ ...preferences, interaction_mode: mode })}
         onVoice={() => void updatePreferences({ ...preferences, voice_enabled: !preferences.voice_enabled })}
         onScale={percent => void updatePetScale(percent)}

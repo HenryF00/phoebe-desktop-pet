@@ -96,3 +96,21 @@ test("folder grants are bounded and stripped to approved fields", () => {
   const withoutGrants = parseCommand('{"type":"prompt","runId":"r1","text":"x"}');
   assert.equal("folderGrants" in withoutGrants, false);
 });
+
+test("conversation seeding accepts only user/assistant text pairs", () => {
+  const command = parseCommand(JSON.stringify({ type: "conversation", conversationId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    history: [{ role: "user", content: "你好" }, { role: "assistant", content: "你好。", extra: "ignored" }] }));
+  assert.deepEqual(command, { type: "conversation", conversationId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    history: [{ role: "user", content: "你好" }, { role: "assistant", content: "你好。" }] });
+  assert.deepEqual(parseCommand(JSON.stringify({ type: "conversation", conversationId: "c-1", history: [] })),
+    { type: "conversation", conversationId: "c-1", history: [] });
+  assert.throws(() => parseCommand(JSON.stringify({ type: "conversation", conversationId: "c-1",
+    history: [{ role: "system", content: "x" }] })));
+  assert.throws(() => parseCommand(JSON.stringify({ type: "conversation", conversationId: "c-1",
+    history: [{ role: "user", content: 1 }] })));
+  assert.throws(() => parseCommand(JSON.stringify({ type: "conversation", conversationId: "bad id!", history: [] })));
+  assert.throws(() => parseCommand(JSON.stringify({ type: "conversation", conversationId: "c-1",
+    history: Array(201).fill({ role: "user", content: "x" }) })));
+  assert.throws(() => parseCommand(JSON.stringify({ type: "conversation", conversationId: "c-1",
+    history: [{ role: "user", content: "a".repeat(1_000_001) }] })));
+});

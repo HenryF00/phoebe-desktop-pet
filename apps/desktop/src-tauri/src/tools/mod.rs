@@ -8,6 +8,7 @@
 //! always shown by Rust (React modal first, native dialog as fallback), so a
 //! compromised or prompt-injected sidecar cannot approve its own request.
 
+mod apps;
 mod audit;
 mod grants;
 mod paths;
@@ -26,6 +27,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use crate::settings::{ActionMode, InteractionMode};
+use apps::{AppCache, AppEntry};
 use registry::{Describe, Parsed, Tool as ToolSpec};
 
 /// How long a user has to answer an approval before it is denied.
@@ -41,6 +43,12 @@ pub fn allowed_tools_for(interaction_mode: InteractionMode, action_mode: ActionM
         "get_device_location",
         "get_current_time",
         "get_system_status",
+        // Read-only and side-effect free: the model may know which folders the
+        // user granted even in chat mode. The grant context is already sent
+        // unconditionally in the prompt, so this adds no new exposure.
+        "list_granted_folders",
+        // Enumerating installed applications is read-only.
+        "list_installed_apps",
     ]
     .iter()
     .map(|name| (*name).to_owned())
@@ -49,13 +57,16 @@ pub fn allowed_tools_for(interaction_mode: InteractionMode, action_mode: ActionM
         tools.extend(
             [
                 "open_url",
-                "list_granted_folders",
                 "list_directory",
                 "read_text_file",
                 "search_files",
                 "write_file",
                 "move_file",
                 "delete_file",
+                "launch_application",
+                "focus_application",
+                "reveal_file",
+                "open_file_with_application",
             ]
             .iter()
             .map(|name| (*name).to_owned()),
@@ -71,6 +82,10 @@ pub struct ToolContext<'a> {
     pub folder: Option<FolderGrant>,
     /// Grant summaries safe to expose to the model.
     pub grants: Vec<GrantSummary>,
+    /// Installed applications, populated only for the listing tool.
+    pub installed_apps: Vec<AppEntry>,
+    /// Resolved application for launch/focus/open-with calls.
+    pub selected_app: Option<AppEntry>,
 }
 
 #[derive(Clone, Serialize)]
@@ -145,6 +160,7 @@ struct Inner {
     approvals: Mutex<HashMap<String, PendingApproval>>,
     audit: Mutex<audit::AuditLog>,
     grants: Mutex<grants::Grants>,
+    apps: Mutex<AppCache>,
     counter: AtomicU64,
 }
 
@@ -220,10 +236,31 @@ impl ToolBroker {
             }
         }
 
+        // An application must come from the enumerated catalog, never from an
+        // arbitrary path supplied by the model.
+        let mut selected_app = None;
+        if let Some(app_id) = spec.required_app(&parsed) {
+            match self.find_app(app_id) {
+                Some(entry) => selected_app = Some(entry),
+                None => {
+                    self.record_audit(run_id, tool_name, "", "deny", "denied", "应用未安装或无法识别");
+                    return ToolOutcome::denied("未安装或无法识别的应用；请先用 list_installed_apps 查看")
+                        .into_line(request_id);
+                }
+            }
+        }
+        let installed_apps = if spec.is_app_listing() {
+            self.installed_apps()
+        } else {
+            Vec::new()
+        };
+
         let ctx = ToolContext {
             app,
             folder,
             grants: self.grant_summaries(),
+            installed_apps,
+            selected_app,
         };
         let describe = match spec.describe(&ctx, &parsed) {
             Ok(describe) => describe,
@@ -333,6 +370,30 @@ impl ToolBroker {
             .lock()
             .map(|grants| grants.summaries())
             .unwrap_or_default()
+    }
+
+    /// Returns the cached application catalog, rescanning when stale.
+    fn installed_apps(&self) -> Vec<AppEntry> {
+        let mut cache = match self.inner.apps.lock() {
+            Ok(cache) => cache,
+            Err(_) => return Vec::new(),
+        };
+        if !cache.is_fresh() {
+            cache.refresh();
+        }
+        cache.entries().to_vec()
+    }
+
+    fn find_app(&self, app_id: &str) -> Option<AppEntry> {
+        let mut cache = self.inner.apps.lock().ok()?;
+        if !cache.is_fresh() {
+            cache.refresh();
+        }
+        cache
+            .entries()
+            .iter()
+            .find(|entry| entry.app_id == app_id)
+            .cloned()
     }
 
     pub fn grant_views(&self) -> Vec<FolderGrant> {
@@ -541,12 +602,20 @@ mod tests {
         let chat = allowed_tools_for(InteractionMode::Chat, ActionMode::Standard);
         assert!(!chat.iter().any(|name| name == "open_url"));
         assert!(!chat.iter().any(|name| name == "read_text_file"));
+        // Read-only listing is available in every mode.
+        assert!(chat.iter().any(|name| name == "list_granted_folders"));
         let disabled = allowed_tools_for(InteractionMode::Assistant, ActionMode::Disabled);
         assert!(!disabled.iter().any(|name| name == "read_text_file"));
+        assert!(disabled.iter().any(|name| name == "list_granted_folders"));
         let assistant = allowed_tools_for(InteractionMode::Assistant, ActionMode::Standard);
-        for expected in ["open_url", "list_granted_folders", "list_directory", "read_text_file", "search_files"] {
+        for expected in [
+            "open_url", "list_granted_folders", "list_directory", "read_text_file", "search_files",
+            "launch_application", "focus_application", "reveal_file", "open_file_with_application",
+        ] {
             assert!(assistant.iter().any(|name| name == expected), "missing {expected}");
         }
+        assert!(assistant.iter().any(|name| name == "list_installed_apps"));
+        assert!(chat.iter().any(|name| name == "list_installed_apps"));
     }
 
     #[test]

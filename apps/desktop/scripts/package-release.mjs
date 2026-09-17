@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -7,6 +7,7 @@ const desktop = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(desktop, "../..");
 const tauri = resolve(root, "node_modules/.bin", process.platform === "win32" ? "tauri.cmd" : "tauri");
 const config = resolve(desktop, "src-tauri/tauri.release.conf.json");
+const version = JSON.parse(readFileSync(resolve(desktop, "src-tauri/tauri.conf.json"), "utf8")).version;
 
 if (process.platform === "darwin") {
   // Tauri's decorative DMG helper is brittle with multi-gigabyte embedded runtimes.
@@ -18,7 +19,7 @@ if (process.platform === "darwin") {
   const bundleRoot = resolve(root, "target/release/bundle");
   const source = resolve(bundleRoot, "macos");
   const architecture = process.arch === "arm64" ? "aarch64" : process.arch;
-  const destination = resolve(bundleRoot, `dmg/Phoebe Assistant_0.1.0_${architecture}.dmg`);
+  const destination = resolve(bundleRoot, `dmg/Phoebe Assistant_${version}_${architecture}.dmg`);
   mkdirSync(dirname(destination), { recursive: true });
   rmSync(destination, { force: true });
   execFileSync("/usr/bin/hdiutil", [

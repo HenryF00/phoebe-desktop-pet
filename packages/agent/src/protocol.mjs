@@ -100,6 +100,24 @@ export function parseCommand(line) {
     if (folderGrants) command.folderGrants = folderGrants;
     return command;
   }
+  if (value.type === "conversation" && typeof value.conversationId === "string"
+      && value.conversationId.length > 0 && value.conversationId.length <= 64
+      && /^[A-Za-z0-9-]+$/.test(value.conversationId) && Array.isArray(value.history)
+      && value.history.length <= 200) {
+    const history = [];
+    let totalBytes = 0;
+    for (const entry of value.history) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)
+          || (entry.role !== "user" && entry.role !== "assistant")
+          || typeof entry.content !== "string")
+        throw new Error("invalid history entry");
+      const bytes = Buffer.byteLength(entry.content);
+      totalBytes += bytes;
+      if (bytes > 1_000_000 || totalBytes > 8_000_000) throw new Error("history too large");
+      history.push({ role: entry.role, content: entry.content });
+    }
+    return { type: "conversation", conversationId: value.conversationId, history };
+  }
   throw new Error("unsupported command");
 }
 

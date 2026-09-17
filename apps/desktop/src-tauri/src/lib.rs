@@ -159,6 +159,15 @@ fn get_token_usage(
 }
 
 #[tauri::command]
+fn get_context_usage(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<agent::ContextUsageSnapshot, String> {
+    require_any_caller(&window, &["pet", "menu"])?;
+    app.state::<AgentSupervisor>().context_usage_snapshot()
+}
+
+#[tauri::command]
 fn set_pet_scale(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
@@ -216,6 +225,112 @@ async fn get_recent_history(
     tauri::async_runtime::spawn_blocking(move || app.state::<HistoryStore>().recent())
         .await
         .map_err(|_| "历史数据库线程不可用".to_owned())?
+}
+
+#[tauri::command]
+async fn list_conversations(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<Vec<history::Conversation>, String> {
+    require_caller(&window, "chat")?;
+    tauri::async_runtime::spawn_blocking(move || app.state::<HistoryStore>().list())
+        .await
+        .map_err(|_| "历史数据库线程不可用".to_owned())?
+}
+
+#[tauri::command]
+async fn get_active_conversation(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<history::ActiveConversation, String> {
+    require_caller(&window, "chat")?;
+    tauri::async_runtime::spawn_blocking(move || app.state::<HistoryStore>().active())
+        .await
+        .map_err(|_| "历史数据库线程不可用".to_owned())?
+}
+
+#[tauri::command]
+async fn create_conversation(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<history::ActiveConversation, String> {
+    require_caller(&window, "chat")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        if app.state::<AgentSupervisor>().is_busy() {
+            return Err("请先结束或停止当前回复，再新建会话".into());
+        }
+        app.state::<HistoryStore>().create()
+    })
+    .await
+    .map_err(|_| "历史数据库线程不可用".to_owned())?
+}
+
+#[tauri::command]
+async fn switch_conversation(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<history::ActiveConversation, String> {
+    require_caller(&window, "chat")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        if app.state::<AgentSupervisor>().is_busy() {
+            return Err("请先结束或停止当前回复，再切换会话".into());
+        }
+        app.state::<HistoryStore>().switch(&id)
+    })
+    .await
+    .map_err(|_| "历史数据库线程不可用".to_owned())?
+}
+
+#[tauri::command]
+async fn rename_conversation(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    id: String,
+    title: String,
+) -> Result<history::ActiveConversation, String> {
+    require_caller(&window, "chat")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<HistoryStore>().rename(&id, &title)?;
+        app.state::<HistoryStore>().active()
+    })
+    .await
+    .map_err(|_| "历史数据库线程不可用".to_owned())?
+}
+
+#[tauri::command]
+async fn delete_conversation(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<history::ActiveConversation, String> {
+    require_caller(&window, "chat")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        if app.state::<AgentSupervisor>().is_busy() {
+            return Err("请先结束或停止当前回复，再删除会话".into());
+        }
+        let target = app
+            .state::<HistoryStore>()
+            .list()?
+            .into_iter()
+            .find(|conversation| conversation.id == id)
+            .ok_or("该会话不存在；请刷新列表")?;
+        let title = if target.title.trim().is_empty() { "（未命名会话）" } else { target.title.as_str() };
+        let confirmed = app
+            .dialog()
+            .message(format!("删除会话「{}」？此操作无法在应用内撤销，该会话的文字记录将被移除。", title))
+            .title("删除菲比助手会话")
+            .parent(&window)
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::YesNo)
+            .blocking_show();
+        if !confirmed {
+            return Ok(app.state::<HistoryStore>().active()?);
+        }
+        app.state::<HistoryStore>().delete(&id)
+    })
+    .await
+    .map_err(|_| "历史数据库线程不可用".to_owned())?
 }
 
 #[tauri::command]
@@ -308,7 +423,7 @@ async fn clear_chat_history(
             return Err("请先结束或停止当前回复，再清理历史".into());
         }
         let confirmed = app.dialog()
-            .message("清理本机保存的全部文字聊天历史？此操作无法在应用内撤销。未保存的对话仍保留在当前窗口。")
+            .message("清理当前会话已保存的全部文字聊天历史？此操作无法在应用内撤销。未保存的对话仍保留在当前窗口。")
             .title("清理菲比助手聊天历史")
             .parent(&window)
             .kind(MessageDialogKind::Warning)
@@ -746,6 +861,7 @@ pub fn run() {
             get_settings,
             get_quick_preferences,
             get_token_usage,
+            get_context_usage,
             set_pet_scale,
             update_quick_preferences,
             update_settings,
@@ -756,6 +872,12 @@ pub fn run() {
             set_autostart,
             get_recent_history,
             clear_chat_history,
+            list_conversations,
+            get_active_conversation,
+            create_conversation,
+            switch_conversation,
+            rename_conversation,
+            delete_conversation,
             get_explicit_memories,
             save_explicit_memory,
             delete_explicit_memory
