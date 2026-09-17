@@ -1,4 +1,7 @@
 import { buildSystemPrompt } from "./prompt-builder.mjs";
+import { ALL_TOOL_NAMES } from "./tools.mjs";
+
+const KNOWN_TOOLS = new Set(ALL_TOOL_NAMES);
 
 export function parseCommand(line) {
   if (typeof line !== "string" || line.length > 65536) throw new Error("invalid command size");
@@ -8,6 +11,26 @@ export function parseCommand(line) {
   if (value.type === "status") return { type: "status" };
   if (value.type === "cancel" && typeof value.runId === "string" && value.runId.length <= 100)
     return { type: "cancel", runId: value.runId };
+  if (value.type === "tool_result" && typeof value.requestId === "string"
+      && value.requestId.length > 0 && value.requestId.length <= 100) {
+    if (value.status !== "success" && value.status !== "denied" && value.status !== "failed")
+      throw new Error("invalid tool result status");
+    let text = "";
+    if (value.content !== undefined) {
+      if (!Array.isArray(value.content) || value.content.length > 8) throw new Error("invalid tool result content");
+      let totalBytes = 0;
+      for (const part of value.content) {
+        if (!part || typeof part !== "object" || part.type !== "text" || typeof part.text !== "string")
+          throw new Error("invalid tool result content");
+        totalBytes += Buffer.byteLength(part.text);
+      }
+      if (totalBytes > 200_000) throw new Error("tool result too large");
+      text = value.content.map(part => part.text).join("\n");
+    }
+    return { type: "tool_result", requestId: value.requestId, status: value.status, text,
+      isError: value.isError === true || value.status !== "success",
+      details: value.details && typeof value.details === "object" ? value.details : null };
+  }
   if (value.type === "prompt" && typeof value.runId === "string" && value.runId.length > 0 && value.runId.length <= 100
       && typeof value.text === "string" && value.text.trim().length > 0 && value.text.length <= 10000) {
     const interactionMode = value.interactionMode === undefined ? "assistant" : value.interactionMode;
@@ -46,16 +69,32 @@ export function parseCommand(line) {
       location = { latitude: loc.latitude, longitude: loc.longitude,
         capturedAt: loc.capturedAt, accuracyMeters: loc.accuracyMeters };
     }
-    return { type: "prompt", runId: value.runId, text: value.text, interactionMode, memories: checked, file, location };
+    let tools = null;
+    if (value.tools !== undefined && value.tools !== null) {
+      if (!Array.isArray(value.tools) || value.tools.length > 64)
+        throw new Error("invalid tool list");
+      const names = new Set();
+      for (const name of value.tools) {
+        if (typeof name !== "string" || !/^[a-z_]{1,48}$/.test(name)) throw new Error("invalid tool name");
+        // Only tools this sidecar actually defines can ever be registered; an
+        // unknown name is dropped rather than trusted.
+        if (KNOWN_TOOLS.has(name)) names.add(name);
+      }
+      if (names.size) tools = [...names];
+    }
+    const command = { type: "prompt", runId: value.runId, text: value.text, interactionMode, memories: checked, file, location };
+    if (tools) command.tools = tools;
+    return command;
   }
   throw new Error("unsupported command");
 }
 
-export function memorySystemPrompt(memories, interactionMode = "assistant") {
+export function memorySystemPrompt(memories, interactionMode = "assistant", tools = [
+  "web_search", "read_selected_file", "get_device_location", "get_current_time", "get_system_status"]) {
   return buildSystemPrompt({
     memories,
     interactionMode,
-    capabilities: ["web_search", "read_selected_file", "get_device_location"],
+    capabilities: tools,
   });
 }
 

@@ -47,3 +47,41 @@ test("attachments are bounded and stripped to approved fields", () => {
 test("events are one JSON object per line", () => {
   assert.equal(encodeEvent({ type: "cancelled", runId: "r1" }), '{"type":"cancelled","runId":"r1"}\n');
 });
+
+test("rust-shaped tool results are accepted by the sidecar", () => {
+  const rustShaped = JSON.stringify({ type: "tool_result", requestId: "req-1", status: "success",
+    content: [{ type: "text", text: "已在系统浏览器中打开 https://example.com" }],
+    details: null, isError: false });
+  assert.deepEqual(parseCommand(rustShaped), { type: "tool_result", requestId: "req-1", status: "success",
+    text: "已在系统浏览器中打开 https://example.com", isError: false, details: null });
+  const denied = JSON.stringify({ type: "tool_result", requestId: "req-2", status: "denied",
+    content: [{ type: "text", text: "用户拒绝了该操作" }], details: null, isError: true });
+  assert.equal(parseCommand(denied).isError, true);
+});
+
+test("tool results are narrowed and bounded", () => {
+  const parsed = parseCommand(JSON.stringify({ type: "tool_result", requestId: "req-1", status: "success",
+    content: [{ type: "text", text: "ok" }], details: { a: 1 }, isError: false }));
+  assert.deepEqual(parsed, { type: "tool_result", requestId: "req-1", status: "success", text: "ok",
+    isError: false, details: { a: 1 } });
+  const denied = parseCommand(JSON.stringify({ type: "tool_result", requestId: "req-2", status: "denied",
+    content: [{ type: "text", text: "no" }] }));
+  assert.equal(denied.isError, true);
+  assert.equal(denied.text, "no");
+  assert.throws(() => parseCommand(JSON.stringify({ type: "tool_result", requestId: "req-3", status: "weird" })));
+  assert.throws(() => parseCommand(JSON.stringify({ type: "tool_result", requestId: "req-4", status: "success",
+    content: [{ type: "text", text: "a".repeat(200_001) }] })));
+});
+
+test("prompt tool lists are validated and deduplicated", () => {
+  const command = parseCommand(JSON.stringify({ type: "prompt", runId: "r1", text: "x",
+    tools: ["open_url", "open_url", "web_search"] }));
+  assert.deepEqual(command.tools, ["open_url", "web_search"]);
+  assert.throws(() => parseCommand(JSON.stringify({ type: "prompt", runId: "r1", text: "x", tools: ["bad name!"] })));
+  const empty = parseCommand(JSON.stringify({ type: "prompt", runId: "r1", text: "x", tools: [] }));
+  assert.equal("tools" in empty, false);
+  const unknown = parseCommand(JSON.stringify({ type: "prompt", runId: "r1", text: "x", tools: ["bash"] }));
+  assert.equal("tools" in unknown, false);
+  const withoutTools = parseCommand('{"type":"prompt","runId":"r1","text":"x"}');
+  assert.equal("tools" in withoutTools, false);
+});

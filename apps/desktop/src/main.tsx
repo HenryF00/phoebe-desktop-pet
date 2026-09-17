@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { AssistantEvent, AssistantReply, SystemStatus, TokenUsage, ToolResult } from "@phoebe/shared";
+import type { ActionMode, ApprovalDecision, ApprovalRequest, AssistantEvent, AssistantReply, AuditEntry, SystemStatus, TokenUsage, ToolResult } from "@phoebe/shared";
 import { MemorySection } from "./MemorySection";
 import { selectPetClip, usePetAnimation, useReducedMotion } from "./petAnimation";
 import "./style.css";
@@ -35,7 +35,7 @@ type HistoryTurn = { runId: string; question: string; answer: string };
 type HistoryOutcome = { runId: string; status: "saved" | "private" | "failed" };
 
 type InteractionMode = "assistant" | "chat";
-type DesktopSettings = { version: number; model: string; privacy_mode: boolean; search_proxy: string; voice_enabled: boolean; interaction_mode: InteractionMode; pet_scale_percent: number };
+type DesktopSettings = { version: number; model: string; privacy_mode: boolean; search_proxy: string; voice_enabled: boolean; interaction_mode: InteractionMode; action_mode: ActionMode; pet_scale_percent: number };
 type QuickPreferences = Pick<DesktopSettings, "interaction_mode" | "voice_enabled" | "pet_scale_percent">;
 type TokenUsageSnapshot = { current: TokenUsage; session: TokenUsage };
 type AutostartStatus = { enabled: boolean; available: boolean };
@@ -49,7 +49,7 @@ type VoiceEvent = {
   gesture?: AssistantReply["gesture"];
 };
 
-const defaultSettings: DesktopSettings = { version: 1, model: "deepseek-v4-flash", privacy_mode: false, search_proxy: "", voice_enabled: true, interaction_mode: "assistant", pet_scale_percent: 100 };
+const defaultSettings: DesktopSettings = { version: 1, model: "deepseek-v4-flash", privacy_mode: false, search_proxy: "", voice_enabled: true, interaction_mode: "assistant", action_mode: "standard", pet_scale_percent: 100 };
 const defaultQuickPreferences: QuickPreferences = { interaction_mode: "assistant", voice_enabled: true, pet_scale_percent: 100 };
 const emptyTokenUsage: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 };
 const defaultTokenUsage: TokenUsageSnapshot = { current: emptyTokenUsage, session: emptyTokenUsage };
@@ -136,6 +136,8 @@ function SettingsApp() {
   const [voiceBusy, setVoiceBusy] = React.useState(false);
   const [voiceDiagnostic, setVoiceDiagnostic] = React.useState<VoiceDiagnostic | null>(null);
   const [memoryResetToken, setMemoryResetToken] = React.useState(0);
+  const [audit, setAudit] = React.useState<AuditEntry[]>([]);
+  const [auditNotice, setAuditNotice] = React.useState("");
   const headingRef = React.useRef<HTMLHeadingElement>(null);
   const closeRef = React.useRef<HTMLButtonElement>(null);
   const keyRef = React.useRef<HTMLInputElement>(null);
@@ -145,7 +147,7 @@ function SettingsApp() {
 
   const changed = draft.model !== saved.model || draft.privacy_mode !== saved.privacy_mode
     || draft.search_proxy !== saved.search_proxy || draft.voice_enabled !== saved.voice_enabled
-    || draft.interaction_mode !== saved.interaction_mode;
+    || draft.interaction_mode !== saved.interaction_mode || draft.action_mode !== saved.action_mode;
   dirtyRef.current = changed || memoryDirty || keyDirty;
   keyBusyRef.current = keyBusy;
   savedRef.current = saved;
@@ -162,6 +164,7 @@ function SettingsApp() {
         setLoadError(false); setNotice("");
         void invoke<SystemStatus>("get_system_status").then(value => { if (!disposed) setStatus(value); }).catch(() => { if (!disposed) setStatus(null); });
         void invoke<AutostartStatus>("get_autostart_status").then(value => { if (!disposed) setAutostart(value); }).catch(() => { if (!disposed) setNotice("无法刷新系统登录项状态。"); });
+        void invoke<AuditEntry[]>("get_audit_log", { limit: 10 }).then(value => { if (!disposed) setAudit(value); }).catch(() => { if (!disposed) setAudit([]); });
       } catch {
         if (disposed) return;
         setLoadError(true);
@@ -227,8 +230,10 @@ function SettingsApp() {
         searchProxy: draft.search_proxy.trim(),
         voiceEnabled: draft.voice_enabled,
         interactionMode: draft.interaction_mode,
+        actionMode: draft.action_mode,
       });
       setSaved(next); setDraft(next); setLoadError(false);
+      void refreshAudit();
       setNotice("设置已保存。新模型会从下一轮对话起使用；当前对话不会被打断。");
     } catch { setNotice("保存失败。请检查应用数据目录权限，然后重试。"); }
     finally { setSaving(false); }
@@ -242,6 +247,21 @@ function SettingsApp() {
       setNotice(enabled ? "已登记开机启动。登录后会恢复桌宠，并在语音开启时后台预热内置声音。" : "已关闭开机启动。");
     } catch { setNotice("无法更新系统登录项。请检查系统权限后重试，原状态保持不变。"); }
     finally { setAutostartBusy(false); }
+  }
+
+  async function refreshAudit() {
+    if (!inTauri) return;
+    try { setAudit(await invoke<AuditEntry[]>("get_audit_log", { limit: 10 })); setAuditNotice(""); }
+    catch { setAudit([]); setAuditNotice("无法读取审计记录。"); }
+  }
+
+  async function panicStop() {
+    if (!inTauri) return;
+    try {
+      await invoke("panic_stop_operations");
+      setAuditNotice("已停止当前操作并拒绝所有待审批项。");
+      void refreshAudit();
+    } catch { setAuditNotice("停止请求失败，请从托盘退出后重启应用。"); }
   }
 
   async function saveKey(event: React.FormEvent<HTMLFormElement>) {
@@ -318,6 +338,16 @@ function SettingsApp() {
             <p className="field-help">隐私模式不会自动清理此前已保存的历史；可在聊天窗手动清理。未保存的对话仍只在内存中。</p>
           </fieldset>
           <fieldset className="settings-group" disabled={loading || saving}>
+            <legend>操作权限</legend>
+            <label htmlFor="action-mode">本机操作策略</label>
+            <select id="action-mode" value={draft.action_mode} onChange={event => setDraft(current => ({ ...current, action_mode: event.target.value as ActionMode }))}>
+              <option value="disabled">关闭 · 不向 Agent 注册操作工具</option>
+              <option value="standard">标准 · 敏感操作逐次确认（默认）</option>
+              <option value="trust">信任 · 已授权网站免重复确认</option>
+            </select>
+            <p className="field-help">聊天模式始终不注册操作工具。操作策略只决定应用内是否逐次确认，不能绕过 macOS 辅助功能、屏幕录制、文件与钥匙串等系统权限。信任模式目前只对“始终允许”过的网站生效。</p>
+          </fieldset>
+          <fieldset className="settings-group" disabled={loading || saving}>
             <legend>联网搜索</legend>
             <label htmlFor="search-proxy">本机搜索代理（可选）</label>
             <input id="search-proxy" type="url" value={draft.search_proxy} placeholder="http://127.0.0.1:7897" autoComplete="off" spellCheck={false}
@@ -345,6 +375,22 @@ function SettingsApp() {
           <label className="setting-switch"><input type="checkbox" checked={autostart.enabled} onChange={event => void changeAutostart(event.target.checked)} disabled={!inTauri || !autostart.available || autostartBusy || loading} /><span><strong>开机启动</strong><small>{autostart.available ? "登录时恢复桌宠；语音开启时会在后台预热内置声音。" : "当前构建未生成正式安装包；登录项暂不可用。"}</small></span></label>
         </fieldset>
         <MemorySection onDirtyChange={setMemoryDirty} resetToken={memoryResetToken} />
+        <fieldset className="settings-group"><legend>操作审计</legend>
+          <p className="field-help">被网关执行或拒绝的操作都会记录在本机 audit.jsonl；这里显示最近 10 条。</p>
+          <div className="audit-list" role="list">
+            {audit.length === 0 && <p className="field-help">还没有本机操作记录。</p>}
+            {audit.map((entry, index) => <div className="audit-row" role="listitem" key={`${entry.timestamp}-${index}`}>
+              <span className={`audit-badge is-${entry.outcome}`}>{entry.outcome === "success" ? "成功" : entry.outcome === "denied" ? "拒绝" : "失败"}</span>
+              <span className="audit-tool">{toolLabels[entry.tool] ?? entry.tool}</span>
+              <span className="audit-target" title={entry.target}>{entry.target || "—"}</span>
+            </div>)}
+          </div>
+          <div className="audit-actions">
+            <button type="button" onClick={() => void refreshAudit()}>刷新记录</button>
+            <button type="button" className="is-danger" onClick={() => void panicStop()} disabled={!inTauri}>立即停止所有操作</button>
+          </div>
+          {auditNotice && <p className="field-help" role="status">{auditNotice}</p>}
+        </fieldset>
         <fieldset className="settings-group"><legend>菲比语音</legend>
           <label className="setting-switch"><input type="checkbox" checked={draft.voice_enabled}
             onChange={event => setDraft(current => ({ ...current, voice_enabled: event.target.checked }))} disabled={loading || saving} />
@@ -385,6 +431,7 @@ function ChatApp() {
   const [privacyOpen, setPrivacyOpen] = React.useState(false);
   const [hasUnread, setHasUnread] = React.useState(false);
   const [voiceEvent, setVoiceEvent] = React.useState<VoiceEvent | null>(null);
+  const [approval, setApproval] = React.useState<ApprovalRequest | null>(null);
   const endRef = React.useRef<HTMLDivElement>(null);
   const bodyRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
@@ -399,9 +446,13 @@ function ChatApp() {
     if (!inTauri) return;
     invoke<SystemStatus>("get_system_status").then(setStatus).catch(() => setStatus(null));
     let disposed = false;
+    void invoke<ApprovalRequest | null>("get_pending_approval").then(value => {
+      if (!disposed && value) { setApproval(value); setAssistantState("awaiting_approval"); }
+    }).catch(() => {});
     let unlisten: (() => void) | null = null;
     let unlistenHistory: (() => void) | null = null;
     let unlistenVoice: (() => void) | null = null;
+    let unlistenApproval: (() => void) | null = null;
     void invoke<HistoryTurn[]>("get_recent_history").then(turns => {
       if (disposed) return;
       setSavedHistoryCount(turns.length);
@@ -462,6 +513,7 @@ function ChatApp() {
       if (payload.type === "completed" || payload.type === "cancelled" || payload.type === "error") {
         setActiveRunId(current => current === payload.runId ? null : current);
         setAssistantState("idle");
+        setApproval(null);
       }
     }).then(fn => {
       if (disposed) fn();
@@ -470,7 +522,10 @@ function ChatApp() {
     void listen<VoiceEvent>("voice-event", event => {
       if (!disposed) setVoiceEvent(event.payload);
     }).then(fn => { if (disposed) fn(); else unlistenVoice = fn; });
-    return () => { disposed = true; unlisten?.(); unlistenHistory?.(); unlistenKey?.(); unlistenVoice?.(); setListenerReady(false); };
+    void listen<ApprovalRequest>("approval-required", event => {
+      if (!disposed) { setApproval(event.payload); setAssistantState("awaiting_approval"); }
+    }).then(fn => { if (disposed) fn(); else unlistenApproval = fn; });
+    return () => { disposed = true; unlisten?.(); unlistenHistory?.(); unlistenKey?.(); unlistenVoice?.(); unlistenApproval?.(); setListenerReady(false); };
   }, []);
 
   React.useEffect(() => {
@@ -608,6 +663,23 @@ function ChatApp() {
     finally { setHistoryBusy(false); }
   }
 
+  async function resolveApproval(decision: ApprovalDecision) {
+    if (!approval) return;
+    const id = approval.id;
+    setApproval(null);
+    setAssistantState(activeRunId ? "thinking" : "idle");
+    try { await invoke("resolve_tool_approval", { approvalId: id, decision }); }
+    catch { setAttachmentNotice("审批提交失败；该操作会被自动拒绝。"); }
+  }
+
+  async function panicStop() {
+    if (!inTauri) return;
+    setApproval(null);
+    setHistoryNotice("已请求停止当前操作并拒绝所有待审批项。");
+    try { await invoke("panic_stop_operations"); }
+    catch { setHistoryNotice("停止请求失败；请从系统托盘退出后重启应用。"); }
+  }
+
   async function sendMessage(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const text = draft.trim();
@@ -688,6 +760,7 @@ function ChatApp() {
 
   return <main className="chat-shell" onKeyDown={event => {
     if (event.key !== "Escape") return;
+    if (approval) { event.preventDefault(); event.stopPropagation(); void resolveApproval("deny"); return; }
     if (headerMenuOpen || toolMenuOpen || privacyOpen) {
       setHeaderMenuOpen(false); setToolMenuOpen(false); setPrivacyOpen(false);
     } else void closeChat();
@@ -701,6 +774,7 @@ function ChatApp() {
           {headerMenuOpen && <div className="chat-popover header-menu">
             <div className="menu-summary"><span>本机历史</span><strong>{historyLoading ? "读取中…" : `${savedHistoryCount} 条`}</strong></div>
             <button type="button" className="menu-row is-danger" onClick={() => { setHeaderMenuOpen(false); void clearHistory(); }} disabled={!inTauri || historyLoading || historyBusy || Boolean(activeRunId) || savedHistoryCount === 0}>{historyBusy ? "正在清理…" : "清理聊天历史"}</button>
+            <button type="button" className="menu-row is-danger" onClick={() => { setHeaderMenuOpen(false); void panicStop(); }} disabled={!inTauri}>{approval ? "拒绝并停止所有操作" : "立即停止所有操作"}</button>
           </div>}
           <button ref={closeRef} className="icon-button" type="button" onClick={closeChat} aria-label="收起聊天窗"><CloseIcon /></button>
         </div>
@@ -794,6 +868,23 @@ function ChatApp() {
         {draftError && <p id="draft-error" className="input-error" role="alert">{draftError}</p>}
         <div className="sr-only" aria-live="polite">{activeRunId ? assistantState === "tool_running" ? "菲比正在使用工具" : "菲比正在回复" : ""}</div>
       </form>
+      {approval && <div className="approval-overlay" role="dialog" aria-modal="true" aria-labelledby="approval-title">
+        <div className="approval-card">
+          <p className="approval-eyebrow">操作确认</p>
+          <h2 id="approval-title">菲比请求执行操作</h2>
+          <dl className="approval-details">
+            <div><dt>操作</dt><dd>{toolLabels[approval.tool] ?? approval.tool}</dd></div>
+            <div><dt>目标</dt><dd>{approval.target || "—"}</dd></div>
+            <div><dt>影响</dt><dd>{approval.impact}</dd></div>
+          </dl>
+          <p className="approval-note">{approval.rememberable ? "「始终允许」只对该目标生效，之后不再逐次确认；可在设置中查看审计记录。" : "标准模式下每次操作都需要你确认，信任模式不会绕过系统权限。"}</p>
+          <div className="approval-actions">
+            <button type="button" className="approval-deny" onClick={() => void resolveApproval("deny")}>拒绝</button>
+            {approval.rememberable && <button type="button" className="approval-always" onClick={() => void resolveApproval("always")}>始终允许</button>}
+            <button type="button" className="approval-allow" autoFocus onClick={() => void resolveApproval("allow_once")}>允许一次</button>
+          </div>
+        </div>
+      </div>}
     </section>
   </main>;
 }

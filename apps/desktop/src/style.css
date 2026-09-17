@@ -436,3 +436,41 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 @keyframes surface-in { from { opacity: 0; transform: translateY(5px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes surface-fade { from { opacity: .75; } to { opacity: 1; } }
+
+/* Tool approval modal (React primary path) */
+.approval-overlay { position: absolute; inset: 0; z-index: 80; display: grid; place-items: center; padding: 20px; background: rgba(24,36,58,.42); backdrop-filter: blur(4px); }
+.approval-card { width: min(360px, 100%); padding: 20px; border: 1px solid color-mix(in srgb, var(--ui-gold) 34%, var(--ui-border)); border-radius: 18px; background: var(--ui-surface); box-shadow: 0 20px 48px rgba(32,58,99,.28); }
+.approval-eyebrow { margin: 0 0 6px; color: var(--ui-gold-strong); font-size: 11px; font-weight: 750; letter-spacing: .1em; }
+.approval-card h2 { margin: 0 0 14px; color: #293665; font-size: 17px; }
+.approval-details { margin: 0; display: grid; gap: 10px; }
+.approval-details > div { display: grid; grid-template-columns: 48px 1fr; gap: 10px; align-items: start; }
+.approval-details dt { color: var(--ui-muted); font-size: 12px; font-weight: 700; }
+.approval-details dd { margin: 0; color: var(--ui-text); font-size: 13px; line-height: 1.5; word-break: break-word; }
+.approval-note { margin: 14px 0 0; color: var(--ui-muted); font-size: 12px; line-height: 1.55; }
+.approval-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.approval-actions button { flex: 1 1 auto; min-height: 42px; padding: 0 12px; border-radius: 11px; border: 1px solid var(--ui-border); background: var(--ui-surface-soft); color: var(--ui-text); font-size: 13px; font-weight: 700; }
+.approval-actions .approval-allow { border-color: var(--ui-blue); background: var(--ui-blue); color: #fff; }
+.approval-actions .approval-always { border-color: color-mix(in srgb, var(--ui-gold) 55%, var(--ui-border)); background: #fff6e7; color: var(--ui-gold-strong); }
+.approval-actions .approval-deny { border-color: color-mix(in srgb, var(--ui-danger) 40%, var(--ui-border)); background: #fdeef2; color: var(--ui-danger); }
+
+/* Operation audit list in settings */
+.audit-list { display: grid; gap: 6px; margin-top: 4px; }
+.audit-row { display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface-soft); font-size: 12px; }
+.audit-badge { padding: 2px 8px; border-radius: 999px; font-weight: 700; font-size: 11px; background: var(--ui-blue-soft); color: var(--ui-blue-strong); }
+.audit-badge.is-success { background: #e6f3ec; color: var(--ui-success); }
+.audit-badge.is-denied { background: #fbe9ee; color: var(--ui-danger); }
+.audit-badge.is-failed { background: #fdf0e2; color: #9a6a1f; }
+.audit-tool { font-weight: 650; color: var(--ui-text); }
+.audit-target { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ui-muted); }
+.audit-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.audit-actions button { min-height: 38px; padding: 0 14px; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface-soft); color: var(--ui-text); font-size: 12px; font-weight: 650; }
+.audit-actions button.is-danger { border-color: color-mix(in srgb, var(--ui-danger) 42%, var(--ui-border)); background: #fdeef2; color: var(--ui-danger); }
+@media (prefers-color-scheme: dark) {
+  .approval-card { background: #1a253c; border-color: #3a4a68; }
+  .approval-card h2 { color: #eef2fb; }
+  .approval-actions .approval-always { background: #3d382d; color: #e7d3b4; }
+  .approval-actions .approval-deny { background: #351e29; color: #f0b9c8; }
+  .audit-row { background: #1e2c47; border-color: #34435f; }
+  .audit-badge.is-success { background: #193629; color: #97d3b4; }
+  .audit-actions button.is-danger { background: #351e29; color: #f0b9c8; }
+}

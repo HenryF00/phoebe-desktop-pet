@@ -2429,6 +2429,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-autostart",
  "tauri-plugin-dialog",
+ "url",
 ]
 
 [[package]]

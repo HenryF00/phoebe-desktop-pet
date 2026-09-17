@@ -8,7 +8,7 @@ export type AssistantEvent =
   | { type: "text_delta"; runId: string; delta: string }
   | { type: "tool_started"; runId: string; tool: ToolName }
   | { type: "tool_progress"; runId: string; detail: string }
-  | { type: "approval_required"; request: ApprovalRequest }
+  | { type: "approval_required"; runId: string; request: ApprovalRequest }
   | { type: "tool_finished"; runId: string; result: ToolResult }
   | { type: "speech_segment"; runId: string; text: string }
   | { type: "completed"; runId: string; reply: AssistantReply }
@@ -36,10 +36,29 @@ export interface ToolCall {
 
 export interface ApprovalRequest {
   id: string;
+  runId: string;
   tool: ToolName;
   target: string;
   impact: string;
   scope: "once" | "bound_target";
+  rememberable: boolean;
+}
+
+/** User answer to an {@link ApprovalRequest}. */
+export type ApprovalDecision = "deny" | "allow_once" | "always";
+
+/** Whether the Agent may request operating-system actions at all. */
+export type ActionMode = "disabled" | "standard" | "trust";
+
+/** One mediated operation recorded by the Rust tool gateway. */
+export interface AuditEntry {
+  timestamp: string;
+  runId: string | null;
+  tool: string;
+  target: string;
+  decision: "auto" | "allow_trusted" | "allow_once" | "allow_always" | "deny";
+  outcome: "success" | "failed" | "denied";
+  message: string;
 }
 
 export interface ToolResult {

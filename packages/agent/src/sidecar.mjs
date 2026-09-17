@@ -1,10 +1,11 @@
 import readline from "node:readline";
+import { randomUUID } from "node:crypto";
 import { Agent } from "@earendil-works/pi-agent-core";
 import { createModels } from "@earendil-works/pi-ai";
 import { deepseekProvider } from "@earendil-works/pi-ai/providers/deepseek";
 import { encodeEvent, parseCommand } from "./protocol.mjs";
 import { buildSystemPrompt } from "./prompt-builder.mjs";
-import { createAgentTools } from "./tools.mjs";
+import { createAgentTools, selectAgentTools, SAFE_DEFAULT_TOOLS } from "./tools.mjs";
 import { inferReplyMotion } from "./motion.mjs";
 import { buildSpeechText } from "./speech.mjs";
 import { addTokenUsage, emptyTokenUsage } from "./usage.mjs";
@@ -21,18 +22,25 @@ let agentTools = null;
 let active = null;
 let toolContext = null;
 
+/** In-flight operating-system tool requests awaiting a Rust `tool_result`. */
+const pendingTools = new Map();
+
 function send(event) { process.stdout.write(encodeEvent(event)); }
 
-function getAgentTools() {
-  if (!agentTools) agentTools = createAgentTools(() => toolContext);
+function getAllAgentTools() {
+  if (!agentTools) agentTools = createAgentTools({ getContext: () => toolContext });
   return agentTools;
 }
 
-function systemPromptFor(memories = [], interactionMode = "assistant") {
+function toolsForTurn(allowed) {
+  return selectAgentTools(getAllAgentTools(), allowed);
+}
+
+function systemPromptFor(memories = [], interactionMode = "assistant", allowed = SAFE_DEFAULT_TOOLS) {
   return buildSystemPrompt({
     memories,
     interactionMode,
-    capabilities: getAgentTools().map(({ name, description }) => ({ name, description })),
+    capabilities: toolsForTurn(allowed).map(({ name, description }) => ({ name, description })),
   });
 }
 
@@ -42,7 +50,7 @@ function getAgent() {
     initialState: {
       systemPrompt: systemPromptFor(),
       model,
-      tools: getAgentTools(),
+      tools: getAllAgentTools(),
     },
     streamFn: models.streamSimple.bind(models),
   });
@@ -73,7 +81,43 @@ function getAgent() {
   return agent;
 }
 
+function abortPending(runId) {
+  for (const [requestId, pending] of pendingTools) {
+    if (runId && pending.runId !== runId) continue;
+    pendingTools.delete(requestId);
+    pending.reject(new Error("操作已取消"));
+  }
+}
+
+/**
+ * Forwards an operating-system tool call to Rust and waits for the gateway's
+ * answer. Node never executes the action itself.
+ */
+function requestTool(tool, args, signal, runId) {
+  const requestId = randomUUID();
+  return new Promise((resolve, reject) => {
+    pendingTools.set(requestId, { resolve, reject, runId });
+    if (signal) {
+      const onAbort = () => {
+        if (pendingTools.delete(requestId)) reject(new Error("操作已取消"));
+      };
+      if (signal.aborted) { onAbort(); return; }
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+    send({ type: "tool_request", requestId, runId, tool, arguments: args });
+  });
+}
+
 async function handle(command) {
+  if (command.type === "tool_result") {
+    const pending = pendingTools.get(command.requestId);
+    if (pending) {
+      pendingTools.delete(command.requestId);
+      if (command.isError) pending.reject(new Error(command.text || "工具执行失败"));
+      else pending.resolve({ content: [{ type: "text", text: command.text }], details: command.details });
+    }
+    return;
+  }
   if (command.type === "status") {
     send({ type: "status", agent: process.env.DEEPSEEK_API_KEY ? "ready" : "not_configured", model: model.id });
     return;
@@ -81,6 +125,7 @@ async function handle(command) {
   if (command.type === "cancel") {
     if (active?.runId === command.runId) {
       active.cancelled = true;
+      abortPending(command.runId);
       getAgent().abort();
     }
     return;
@@ -90,18 +135,25 @@ async function handle(command) {
     send({ type: "error", runId: command.runId, message: "DeepSeek API Key 尚未由桌面核心配置" });
     return;
   }
+  const allowed = Array.isArray(command.tools) && command.tools.length ? command.tools : SAFE_DEFAULT_TOOLS;
   const run = { runId: command.runId, text: "", userText: command.text, interactionMode: command.interactionMode,
     usedTool: false, cancelled: false, timedOut: false, usage: emptyTokenUsage() };
   active = run;
-  toolContext = { file: command.file, location: command.location };
+  toolContext = {
+    file: command.file,
+    location: command.location,
+    requestTool: (tool, args, signal) => requestTool(tool, args, signal, run.runId),
+  };
   send({ type: "state", state: "thinking", runId: run.runId });
   const timeout = setTimeout(() => {
     run.timedOut = true;
+    abortPending(run.runId);
     getAgent().abort();
   }, 120_000);
   try {
     const currentAgent = getAgent();
-    currentAgent.state.systemPrompt = systemPromptFor(command.memories, command.interactionMode);
+    currentAgent.state.systemPrompt = systemPromptFor(command.memories, command.interactionMode, allowed);
+    currentAgent.state.tools = toolsForTurn(allowed);
     currentAgent.state.messages = currentAgent.state.messages.slice(-16);
     await currentAgent.prompt(command.text);
     if (run.timedOut) send({ type: "error", runId: run.runId, message: "模型回复超时；请重试" });
@@ -124,6 +176,7 @@ async function handle(command) {
       : { type: "error", runId: run.runId, message: "模型请求失败，请稍后重试" });
   } finally {
     clearTimeout(timeout);
+    abortPending(run.runId);
     if (agent && !agent.state.isStreaming) {
       agent.state.messages = command.file || command.location ? [] : agent.state.messages.slice(-16);
     }
@@ -138,4 +191,7 @@ lines.on("line", line => {
   try { void handle(parseCommand(line)); }
   catch { send({ type: "error", message: "无效的 Sidecar 命令" }); }
 });
-lines.on("close", () => { if (active) getAgent().abort(); });
+lines.on("close", () => {
+  abortPending(null);
+  if (active) getAgent().abort();
+});

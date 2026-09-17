@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createAgentTools, parseSearchResults, searchWeb } from "../src/tools.mjs";
+import { createAgentTools, parseSearchResults, searchWeb, selectAgentTools, SAFE_DEFAULT_TOOLS } from "../src/tools.mjs";
 
 const sample = "1.[Phoebe (given name) - Wikipedia](https://duckduckgo.com/l/?uddg=https%3A%2F%2Fen.wikipedia.org%2Fwiki%2FPhoebe_(given_name)&rut=x)\nA name.\n";
 
@@ -27,8 +27,9 @@ test("search uses the fixed provider URL and bounded query", async () => {
 
 test("file and location tools only expose the current authorized attachments", async () => {
   let context = { file: null, location: null };
-  const tools = createAgentTools(() => context, { fetchImpl: async () => ({ ok: true, text: async () => sample }) });
-  assert.deepEqual(tools.map(tool => tool.name), ["web_search", "read_selected_file", "get_device_location"]);
+  const tools = createAgentTools({ getContext: () => context, fetchImpl: async () => ({ ok: true, text: async () => sample }) });
+  assert.deepEqual(tools.map(tool => tool.name),
+    ["web_search", "read_selected_file", "get_device_location", "get_current_time", "get_system_status", "open_url"]);
   await assert.rejects(tools[1].execute("x", {}), /尚未/);
   await assert.rejects(tools[2].execute("x", {}), /尚未/);
   context = { file: { name: "x.txt", content: "hello" },
@@ -36,4 +37,27 @@ test("file and location tools only expose the current authorized attachments", a
   assert.match((await tools[1].execute("x", {})).content[0].text, /hello/);
   assert.match((await tools[2].execute("x", {})).content[0].text, /30\.1/);
   assert.equal((await tools[0].execute("x", { query: "菲比" })).details.count, 1);
+});
+
+test("operating-system tools forward to the Rust broker and fail closed", async () => {
+  const calls = [];
+  let context = { requestTool: async (tool, args) => {
+    calls.push({ tool, args });
+    return { content: [{ type: "text", text: `${tool}:ok` }], details: { via: "broker" } };
+  } };
+  const tools = createAgentTools({ getContext: () => context });
+  const openUrl = tools.find(tool => tool.name === "open_url");
+  const result = await openUrl.execute("id", { url: "https://example.com" });
+  assert.deepEqual(calls, [{ tool: "open_url", args: { url: "https://example.com" } }]);
+  assert.equal(result.content[0].text, "open_url:ok");
+  assert.deepEqual(result.details, { via: "broker" });
+
+  assert.deepEqual(selectAgentTools(tools, ["web_search", "open_url"]).map(tool => tool.name),
+    ["web_search", "open_url"]);
+  assert.deepEqual(selectAgentTools(tools, SAFE_DEFAULT_TOOLS).map(tool => tool.name),
+    SAFE_DEFAULT_TOOLS);
+
+  const ungranted = createAgentTools({ getContext: () => ({}) });
+  await assert.rejects(ungranted.find(tool => tool.name === "open_url").execute("id", { url: "https://example.com" }),
+    /未向 Agent 注册/);
 });

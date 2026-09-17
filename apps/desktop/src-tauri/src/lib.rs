@@ -2,6 +2,7 @@ mod agent;
 mod history;
 pub mod secure_store;
 mod settings;
+mod tools;
 mod voice;
 mod window_manager;
 
@@ -46,19 +47,6 @@ struct SystemStatus {
     agent: &'static str,
     voice: String,
     version: &'static str,
-}
-
-#[derive(Serialize)]
-struct ToolResult {
-    status: &'static str,
-    message: String,
-}
-
-fn validate_read_only_tool(name: &str) -> Result<(), &'static str> {
-    match name {
-        "get_current_time" | "get_system_status" => Ok(()),
-        _ => Err("该工具未注册为只读工具"),
-    }
 }
 
 #[tauri::command]
@@ -345,6 +333,7 @@ fn update_settings(
     search_proxy: String,
     voice_enabled: bool,
     interaction_mode: settings::InteractionMode,
+    action_mode: settings::ActionMode,
 ) -> Result<settings::Settings, String> {
     require_caller(&window, "settings")?;
     let settings = app.state::<settings::SettingsStore>().update(
@@ -354,6 +343,7 @@ fn update_settings(
         search_proxy,
         voice_enabled,
         interaction_mode,
+        action_mode,
     )?;
     if !settings.voice_enabled {
         app.state::<VoiceService>().stop(&app);
@@ -582,39 +572,55 @@ async fn cancel_agent(
     run_id: String,
 ) -> Result<(), String> {
     require_caller(&window, "chat")?;
-    tauri::async_runtime::spawn_blocking(move || app.state::<AgentSupervisor>().cancel(&run_id))
-        .await
-        .map_err(|_| "Agent 工作线程不可用".to_owned())?
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<AgentSupervisor>().cancel(&app, &run_id)
+    })
+    .await
+    .map_err(|_| "Agent 工作线程不可用".to_owned())?
 }
 
 #[tauri::command]
-fn run_read_only_tool(window: tauri::WebviewWindow, name: String) -> ToolResult {
-    if require_caller(&window, "chat").is_err() {
-        return ToolResult {
-            status: "denied",
-            message: "当前窗口没有执行该操作的权限".to_owned(),
-        };
+fn resolve_tool_approval(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    approval_id: String,
+    decision: String,
+) -> Result<(), String> {
+    require_caller(&window, "chat")?;
+    if approval_id.is_empty() || approval_id.len() > 64 {
+        return Err("审批标识无效".into());
     }
-    if let Err(reason) = validate_read_only_tool(&name) {
-        return ToolResult {
-            status: "denied",
-            message: reason.to_owned(),
-        };
-    }
-    match name.as_str() {
-        "get_current_time" => ToolResult {
-            status: "success",
-            message: format!(
-                "当前本地时间：{}",
-                chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
-            ),
-        },
-        "get_system_status" => ToolResult {
-            status: "success",
-            message: "桌面核心已运行；Agent 与语音状态请查看面板。".to_owned(),
-        },
-        _ => unreachable!("validated tool name"),
-    }
+    app.state::<tools::ToolBroker>().resolve(&approval_id, &decision)
+}
+
+#[tauri::command]
+fn get_pending_approval(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<Option<tools::ApprovalView>, String> {
+    require_caller(&window, "chat")?;
+    Ok(app.state::<tools::ToolBroker>().pending_view())
+}
+
+#[tauri::command]
+fn get_audit_log(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    limit: usize,
+) -> Result<Vec<tools::AuditEntry>, String> {
+    require_caller(&window, "settings")?;
+    Ok(app.state::<tools::ToolBroker>().recent_audit(limit.min(100)))
+}
+
+#[tauri::command]
+fn panic_stop_operations(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    require_any_caller(&window, &["chat", "menu", "settings"])?;
+    app.state::<tools::ToolBroker>().deny_all();
+    let _ = app.state::<AgentSupervisor>().cancel_active(&app);
+    Ok(())
 }
 
 pub fn run() {
@@ -630,7 +636,11 @@ pub fn run() {
         .manage(HistoryStore::default())
         .manage(settings::SettingsStore::default())
         .manage(window_manager::PositionDebouncer::default())
+        .manage(tools::ToolBroker::default())
         .setup(|app| {
+            if let Err(error) = app.state::<tools::ToolBroker>().load(app.handle()) {
+                eprintln!("tool broker audit/grant load failed: {error}");
+            }
             let pet_scale_percent = {
                 let store = app.state::<settings::SettingsStore>();
                 if let Err(error) = store.load(app.handle()) {
@@ -658,7 +668,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_system_status,
             set_deepseek_api_key,
-            run_read_only_tool,
+            resolve_tool_approval,
+            get_pending_approval,
+            get_audit_log,
+            panic_stop_operations,
             prompt_agent,
             select_agent_file,
             attach_device_location,
@@ -707,16 +720,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_allowed_caller, validate_read_only_tool};
-
-    #[test]
-    fn only_registered_read_only_tools_are_accepted() {
-        assert!(validate_read_only_tool("get_current_time").is_ok());
-        assert!(validate_read_only_tool("get_system_status").is_ok());
-        assert!(validate_read_only_tool("launch_wuthering_waves").is_err());
-        assert!(validate_read_only_tool("bash").is_err());
-        assert!(validate_read_only_tool("open_url").is_err());
-    }
+    use super::is_allowed_caller;
 
     #[test]
     fn pet_cannot_invoke_chat_only_agent_commands() {

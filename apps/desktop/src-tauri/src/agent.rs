@@ -37,6 +37,21 @@ enum AgentEvent {
         run_id: String,
         result: serde_json::Value,
     },
+    ToolRequest {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "runId")]
+        run_id: String,
+        tool: String,
+        arguments: serde_json::Value,
+    },
+    ToolProgress {
+        #[serde(rename = "runId")]
+        run_id: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        detail: String,
+    },
     Completed {
         #[serde(rename = "runId")]
         run_id: String,
@@ -112,6 +127,8 @@ impl AgentEvent {
             | Self::Usage { run_id, .. }
             | Self::ToolStarted { run_id, .. }
             | Self::ToolFinished { run_id, .. }
+            | Self::ToolRequest { run_id, .. }
+            | Self::ToolProgress { run_id, .. }
             | Self::Completed { run_id, .. }
             | Self::Cancelled { run_id }
             | Self::Error { run_id, .. } => run_id,
@@ -134,11 +151,22 @@ struct AgentProcess {
     search_proxy: String,
 }
 
+impl AgentProcess {
+    /// Writes one JSON command to the sidecar. Used both by the supervisor and
+    /// by tool-result threads, so it must stay atomic per line.
+    fn write_line(&mut self, line: &str) -> std::io::Result<()> {
+        self.stdin.write_all(line.as_bytes())?;
+        self.stdin.write_all(b"\n")?;
+        self.stdin.flush()
+    }
+}
+
 #[derive(Clone)]
 struct ActiveRun {
     run_id: String,
     question: String,
     private_at_start: bool,
+    allowed_tools: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -166,7 +194,7 @@ struct LocationAttachment {
 
 #[derive(Default)]
 pub struct AgentSupervisor {
-    process: Mutex<Option<AgentProcess>>,
+    process: Arc<Mutex<Option<AgentProcess>>>,
     active: Arc<Mutex<Option<ActiveRun>>>,
     generation: Arc<AtomicU64>,
     file_attachment: Mutex<Option<FileAttachment>>,
@@ -297,6 +325,8 @@ impl AgentSupervisor {
         app.state::<crate::voice::VoiceService>().stop(app);
         let settings = app.state::<crate::settings::SettingsStore>().get()?;
         let interaction_mode = settings.interaction_mode;
+        let action_mode = settings.action_mode;
+        let allowed_tools = crate::tools::allowed_tools_for(interaction_mode, action_mode);
         let model = settings.model;
         let search_proxy = settings.search_proxy;
         let memories = app
@@ -330,6 +360,7 @@ impl AgentSupervisor {
             run_id: run_id.to_owned(),
             question: text.to_owned(),
             private_at_start: settings.privacy_mode,
+            allowed_tools: allowed_tools.clone(),
         });
         drop(active);
         let usage_snapshot = {
@@ -346,7 +377,8 @@ impl AgentSupervisor {
             &search_proxy,
             serde_json::json!({
                 "type": "prompt", "runId": run_id, "text": text, "memories": memories,
-                "file": file, "location": location, "interactionMode": interaction_mode
+                "file": file, "location": location, "interactionMode": interaction_mode,
+                "tools": allowed_tools
             }),
         );
         if result.is_err() {
@@ -357,21 +389,35 @@ impl AgentSupervisor {
         result
     }
 
-    pub fn cancel(&self, run_id: &str) -> Result<(), String> {
+    pub fn cancel(&self, app: &tauri::AppHandle, run_id: &str) -> Result<(), String> {
         let active = self.active.lock().map_err(|_| "Agent 状态不可用")?;
         if active.as_ref().map(|run| run.run_id.as_str()) != Some(run_id) {
             return Err("该轮回复已结束".into());
         }
         drop(active);
+        if let Some(broker) = app.try_state::<crate::tools::ToolBroker>() {
+            broker.deny_run(run_id);
+        }
+        let line = serde_json::json!({ "type": "cancel", "runId": run_id }).to_string();
         let mut process = self.process.lock().map_err(|_| "Agent 进程不可用")?;
         let child = process.as_mut().ok_or("Agent 进程未运行")?;
-        let line = serde_json::json!({ "type": "cancel", "runId": run_id }).to_string();
         child
-            .stdin
-            .write_all(line.as_bytes())
-            .and_then(|_| child.stdin.write_all(b"\n"))
-            .and_then(|_| child.stdin.flush())
+            .write_line(&line)
             .map_err(|_| "无法中断 Agent 进程".into())
+    }
+
+    /// Cancels whatever run is active, if any. Used by the emergency stop.
+    pub fn cancel_active(&self, app: &tauri::AppHandle) -> Result<(), String> {
+        let run_id = self
+            .active
+            .lock()
+            .map_err(|_| "Agent 状态不可用")?
+            .as_ref()
+            .map(|run| run.run_id.clone());
+        match run_id {
+            Some(run_id) => self.cancel(app, &run_id),
+            None => Ok(()),
+        }
     }
 
     fn write_command(
@@ -403,10 +449,7 @@ impl AgentSupervisor {
         let child = process.as_mut().ok_or("Agent 进程未运行")?;
         let line = command.to_string();
         child
-            .stdin
-            .write_all(line.as_bytes())
-            .and_then(|_| child.stdin.write_all(b"\n"))
-            .and_then(|_| child.stdin.flush())
+            .write_line(&line)
             .map_err(|_| "无法向 Agent 发送消息".into())
     }
 
@@ -478,6 +521,10 @@ impl AgentSupervisor {
         let stdout = child.stdout.take().ok_or("Pi Sidecar 输出不可用")?;
         let handle = app.clone();
         let active = Arc::clone(&self.active);
+        let process_for_results = Arc::clone(&self.process);
+        let broker = app
+            .try_state::<crate::tools::ToolBroker>()
+            .map(|state| state.inner().clone());
         let usage_totals = Arc::clone(&self.usage);
         let supervisor_generation = Arc::clone(&self.generation);
         let my_generation = supervisor_generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -495,12 +542,61 @@ impl AgentSupervisor {
                 if current.as_ref().map(|run| run.run_id.as_str()) != Some(event.run_id()) {
                     continue;
                 }
+                let allowed_tools = current
+                    .as_ref()
+                    .map(|run| run.allowed_tools.clone())
+                    .unwrap_or_default();
                 let finished = if event.terminal() {
                     current.take()
                 } else {
                     None
                 };
                 drop(current);
+                if let AgentEvent::ToolRequest {
+                    request_id,
+                    run_id,
+                    tool,
+                    arguments,
+                } = &event
+                {
+                    let broker = broker.clone();
+                    let handle = handle.clone();
+                    let process = Arc::clone(&process_for_results);
+                    let request_id = request_id.clone();
+                    let run_id = run_id.clone();
+                    let tool = tool.clone();
+                    let arguments = arguments.clone();
+                    let authorized = allowed_tools.iter().any(|name| name == &tool);
+                    std::thread::spawn(move || {
+                        let line = match broker {
+                            Some(broker) if authorized => broker.handle_request(
+                                &handle,
+                                &run_id,
+                                &tool,
+                                &arguments,
+                                &request_id,
+                            ),
+                            _ => serde_json::json!({
+                                "type": "tool_result",
+                                "requestId": request_id,
+                                "status": "denied",
+                                "content": [{ "type": "text", "text": "本轮未授权该工具" }],
+                                "details": serde_json::Value::Null,
+                                "isError": true,
+                            })
+                            .to_string(),
+                        };
+                        if let Ok(mut guard) = process.lock() {
+                            if let Some(process) = guard.as_mut() {
+                                let _ = process.write_line(&line);
+                            }
+                        }
+                    });
+                    continue;
+                }
+                if let (Some(run), Some(broker)) = (&finished, broker.as_ref()) {
+                    broker.deny_run(&run.run_id);
+                }
                 if let AgentEvent::Usage { usage, .. } = &event {
                     if let Ok(mut totals) = usage_totals.lock() {
                         totals.record_cumulative(usage);
@@ -560,6 +656,9 @@ impl AgentSupervisor {
             if supervisor_generation.load(Ordering::SeqCst) == my_generation {
                 if let Ok(mut current) = active.lock() {
                     if let Some(run) = current.take() {
+                        if let Some(broker) = broker.as_ref() {
+                            broker.deny_run(&run.run_id);
+                        }
                         let _ = handle.emit(
                             "assistant-event",
                             AgentEvent::Error {
@@ -654,6 +753,28 @@ mod tests {
         assert!(
             serde_json::from_str::<AgentEvent>(r#"{"type":"tool_started","runId":"r-1"}"#).is_err()
         );
+    }
+
+    #[test]
+    fn sidecar_tool_requests_are_parsed_with_their_wire_fields() {
+        let parsed = serde_json::from_str::<AgentEvent>(
+            r#"{"type":"tool_request","requestId":"req-1","runId":"r-1","tool":"open_url","arguments":{"url":"https://example.com"}}"#,
+        )
+        .unwrap();
+        match parsed {
+            AgentEvent::ToolRequest {
+                request_id,
+                run_id,
+                tool,
+                arguments,
+            } => {
+                assert_eq!(request_id, "req-1");
+                assert_eq!(run_id, "r-1");
+                assert_eq!(tool, "open_url");
+                assert_eq!(arguments["url"], "https://example.com");
+            }
+            _ => panic!("expected a tool request"),
+        }
     }
 
     #[test]

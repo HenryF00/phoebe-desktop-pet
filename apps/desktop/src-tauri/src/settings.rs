@@ -14,6 +14,21 @@ pub enum InteractionMode {
     Chat,
 }
 
+/// Controls whether the Agent may request operating-system actions at all.
+/// The mode only decides in-app confirmation; it can never bypass macOS or
+/// Windows system permissions.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionMode {
+    /// No operation tools are registered for the Agent.
+    Disabled,
+    /// Sensitive operations are confirmed every time.
+    #[default]
+    Standard,
+    /// Previously trusted folders, domains and applications are not confirmed again.
+    Trust,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Settings {
     pub version: u8,
@@ -25,6 +40,8 @@ pub struct Settings {
     pub voice_enabled: bool,
     #[serde(default)]
     pub interaction_mode: InteractionMode,
+    #[serde(default)]
+    pub action_mode: ActionMode,
     #[serde(default = "default_pet_scale_percent")]
     pub pet_scale_percent: u16,
 }
@@ -46,6 +63,7 @@ impl Default for Settings {
             search_proxy: String::new(),
             voice_enabled: true,
             interaction_mode: InteractionMode::Assistant,
+            action_mode: ActionMode::Standard,
             pet_scale_percent: DEFAULT_PET_SCALE_PERCENT,
         }
     }
@@ -148,6 +166,7 @@ impl SettingsStore {
         search_proxy: String,
         voice_enabled: bool,
         interaction_mode: InteractionMode,
+        action_mode: ActionMode,
     ) -> Result<Settings, String> {
         let mut next = self.get()?;
         next.model = model;
@@ -155,6 +174,7 @@ impl SettingsStore {
         next.search_proxy = search_proxy;
         next.voice_enabled = voice_enabled;
         next.interaction_mode = interaction_mode;
+        next.action_mode = action_mode;
         self.persist(app, next)
     }
 
@@ -233,6 +253,7 @@ mod tests {
         .expect("version one settings should remain readable");
         assert!(migrated.voice_enabled);
         assert_eq!(migrated.interaction_mode, super::InteractionMode::Assistant);
+        assert_eq!(migrated.action_mode, super::ActionMode::Standard);
         assert_eq!(migrated.pet_scale_percent, DEFAULT_PET_SCALE_PERCENT);
     }
 }
