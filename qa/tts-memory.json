@@ -1,7 +1,0 @@
-{
-  "server_pid": 47796,
-  "rss_sample_interval_seconds": 0.2,
-  "observed_peak_rss_gib": 4.5411224365234375,
-  "note": "Sampled server resident memory, not total unified-memory usage or guaranteed instantaneous peak",
-  "probe_exit_code": 0
-}

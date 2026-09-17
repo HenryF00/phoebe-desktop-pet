@@ -127,7 +127,7 @@ docs/                         实现、角色、素材和语音说明
 phoebe_voice_zh/              语音元数据与打包所需的单段参考音频
 ```
 
-仓库中保留的旧 Swift/AppKit 与 Roxy 文件只作为迁移参考；当前菲比桌面应用的入口是 `apps/desktop`。
+当前菲比桌面应用的入口是 `apps/desktop`。
 
 ## ver0.1 已知边界
 

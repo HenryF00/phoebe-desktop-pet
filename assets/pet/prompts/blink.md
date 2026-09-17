@@ -1,8 +1,0 @@
-Use case: identity-preserve
-Asset type: ONE native-resolution full-body anime animation frame, blink.
-Input image: attached character-master.png is the edit target and exact identity, pose, shape, style, camera and proportions reference.
-Primary request: reproduce this same exact Roxy Migurdia master with BOTH eyes gently FULLY CLOSED midway through a blink. Change only the eyelids to small natural closed-eye lines; mouth stays the exact neutral soft smile. Body remains in the exact same neutral stance and both arms lowered. No other pose, camera, anatomy or clothing changes.
-Backdrop: uniform solid pure MAGENTA #FF00FF, fully opaque, no gradient, ground shadow, checkerboard or transparency simulation.
-Composition: square image, one single full-height character, whole silhouette from hat tip through both boots, approximately 1150-1200 pixels tall, 20px clear margin around all extremities. Preserve reference camera distance and exact head/body proportions. Native high resolution, never upscale. No grid or other figures.
-Subject invariants: same slender anime anatomy approximately 5.5 heads excluding hat, exact small head and face shape, blue fringe and twin braids, charcoal witch hat with cream band, charcoal cape with cream trim, cream tunic, brown belt and boots, dark leggings. Fully clothed. Do not enlarge head, round face, shorten body, thicken limbs, move fingers, shift feet or alter cape/braid silhouettes.
-Style invariants: same clean fine cel-anime linework and restrained two-tone shading. NO chibi, pixel art, staff, props, text, readable marks, added symbols, speed lines or motion effects. Only eyelids differ from the attached master; replace transparent/background area with exact flat magenta.

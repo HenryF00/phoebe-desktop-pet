@@ -1,7 +1,0 @@
-{
-  "dictionary_source": "https://api.github.com/repos/r9y9/open_jtalk/releases/assets/45068559",
-  "dictionary_bytes": 23646843,
-  "dictionary_sha256": "fe6ba0e43542cef98339abdffd903e062008ea170b04e7e2a35da805902f382a",
-  "fasttext_source": "https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin",
-  "fasttext_md5": "01810bc59c6a3d2b79c79e6336612f65"
-}
