@@ -46,6 +46,7 @@ fn autostart_available(app: &tauri::AppHandle) -> bool {
 struct SystemStatus {
     platform: &'static str,
     agent: &'static str,
+    video: &'static str,
     voice: String,
     version: &'static str,
 }
@@ -54,14 +55,16 @@ struct SystemStatus {
 async fn get_system_status(window: tauri::WebviewWindow) -> Result<SystemStatus, String> {
     require_any_caller(&window, &["chat", "settings"])?;
     let app = window.app_handle().clone();
-    let agent = tauri::async_runtime::spawn_blocking(move || {
-        agent::key_status(&app.state::<secure_store::SecureStore>())
+    let (agent, video) = tauri::async_runtime::spawn_blocking(move || {
+        let store = app.state::<secure_store::SecureStore>();
+        (agent::key_status(&store), agent::video_key_status(&store))
     })
     .await
-    .unwrap_or("failed");
+    .map_err(|_| "状态线程不可用".to_owned())?;
     Ok(SystemStatus {
         platform: std::env::consts::OS,
         agent,
+        video,
         voice: window
             .app_handle()
             .state::<VoiceService>()
@@ -81,6 +84,24 @@ async fn set_deepseek_api_key(
     let key_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         key_app.state::<secure_store::SecureStore>().set_key(&key)
+    })
+    .await
+    .map_err(|_| "系统安全存储线程不可用".to_owned())?
+    .map_err(str::to_owned)?;
+    let _ = app.emit("agent-key-status", ());
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_dashscope_api_key(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    key: String,
+) -> Result<(), String> {
+    require_caller(&window, "settings")?;
+    let key_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        key_app.state::<secure_store::SecureStore>().set_video_key(&key)
     })
     .await
     .map_err(|_| "系统安全存储线程不可用".to_owned())?
@@ -879,6 +900,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_system_status,
             set_deepseek_api_key,
+            set_dashscope_api_key,
             resolve_tool_approval,
             get_pending_approval,
             get_audit_log,

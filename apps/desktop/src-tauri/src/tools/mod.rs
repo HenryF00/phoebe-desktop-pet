@@ -14,6 +14,7 @@ mod grants;
 mod location;
 mod paths;
 mod registry;
+mod video;
 
 pub use audit::AuditEntry;
 pub use grants::{FolderGrant, GrantSummary};
@@ -61,6 +62,7 @@ pub fn allowed_tools_for(interaction_mode: InteractionMode, action_mode: ActionM
                 "list_directory",
                 "read_text_file",
                 "search_files",
+                "analyze_video",
                 "write_file",
                 "move_file",
                 "delete_file",

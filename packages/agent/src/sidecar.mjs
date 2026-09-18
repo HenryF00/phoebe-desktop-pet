@@ -173,6 +173,9 @@ async function handle(command) {
     return;
   }
   const allowed = Array.isArray(command.tools) && command.tools.length ? command.tools : SAFE_DEFAULT_TOOLS;
+  // Video analysis can take minutes (ffmpeg clip + upload + model inference),
+  // so the whole-turn timeout is relaxed only when that tool is registered.
+  const runTimeoutMs = allowed.includes("analyze_video") ? 300_000 : 120_000;
   const run = { runId: command.runId, text: "", userText: command.text, interactionMode: command.interactionMode,
     usedTool: false, cancelled: false, timedOut: false, usage: emptyTokenUsage() };
   active = run;
@@ -185,7 +188,7 @@ async function handle(command) {
     run.timedOut = true;
     abortPending(run.runId);
     getAgent().abort();
-  }, 120_000);
+  }, runTimeoutMs);
   try {
     const currentAgent = getAgent();
     currentAgent.state.systemPrompt = systemPromptFor(command.memories, command.interactionMode, allowed, command.folderGrants || [], command.occasion, command.userAddress);

@@ -112,6 +112,7 @@ const toolLabels: Record<string, string> = {
   list_directory: "列出目录",
   read_text_file: "读取文本文件",
   search_files: "搜索文件",
+  analyze_video: "分析视频",
   write_file: "写入文件",
   move_file: "移动文件",
   delete_file: "删除到废纸篓",
@@ -229,6 +230,10 @@ function SettingsApp() {
   const [keyBusy, setKeyBusy] = React.useState(false);
   const [keyNotice, setKeyNotice] = React.useState("");
   const [keyError, setKeyError] = React.useState("");
+  const [videoKeyDirty, setVideoKeyDirty] = React.useState(false);
+  const [videoKeyBusy, setVideoKeyBusy] = React.useState(false);
+  const [videoKeyNotice, setVideoKeyNotice] = React.useState("");
+  const [videoKeyError, setVideoKeyError] = React.useState("");
   const [voiceBusy, setVoiceBusy] = React.useState(false);
   const [voiceDiagnostic, setVoiceDiagnostic] = React.useState<VoiceDiagnostic | null>(null);
   const [memoryResetToken, setMemoryResetToken] = React.useState(0);
@@ -239,6 +244,7 @@ function SettingsApp() {
   const headingRef = React.useRef<HTMLHeadingElement>(null);
   const closeRef = React.useRef<HTMLButtonElement>(null);
   const keyRef = React.useRef<HTMLInputElement>(null);
+  const videoKeyRef = React.useRef<HTMLInputElement>(null);
   const dirtyRef = React.useRef(false);
   const keyBusyRef = React.useRef(false);
   const savedRef = React.useRef(saved);
@@ -247,8 +253,8 @@ function SettingsApp() {
     || draft.search_proxy !== saved.search_proxy || draft.voice_enabled !== saved.voice_enabled
     || draft.interaction_mode !== saved.interaction_mode || draft.action_mode !== saved.action_mode
     || (draft.birthday ?? "") !== (saved.birthday ?? "") || draft.user_address !== saved.user_address;
-  dirtyRef.current = changed || memoryDirty || keyDirty;
-  keyBusyRef.current = keyBusy;
+  dirtyRef.current = changed || memoryDirty || keyDirty || videoKeyDirty;
+  keyBusyRef.current = keyBusy || videoKeyBusy;
   savedRef.current = saved;
 
   React.useEffect(() => {
@@ -395,6 +401,26 @@ function SettingsApp() {
     finally { setKeyBusy(false); }
   }
 
+  async function saveVideoKey(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!inTauri || videoKeyBusy) return;
+    const key = videoKeyRef.current?.value.trim() || "";
+    if (!key || new TextEncoder().encode(key).length > 4096) {
+      setVideoKeyError("请输入不超过 4096 字节的 API Key。");
+      return;
+    }
+    setVideoKeyBusy(true); setVideoKeyError(""); setVideoKeyNotice("");
+    if (videoKeyRef.current) videoKeyRef.current.value = "";
+    setVideoKeyDirty(false);
+    try {
+      await invoke("set_dashscope_api_key", { key });
+      setStatus(current => current ? { ...current, video: "ready" } : current);
+      void invoke<SystemStatus>("get_system_status").then(setStatus).catch(() => setVideoKeyNotice("密钥已保存，但状态刷新失败；请重新打开设置。"));
+      setVideoKeyNotice("已保存在本机系统安全存储。视频分析会使用该密钥。");
+    } catch { setVideoKeyError("保存失败。请检查系统安全存储权限，并重新打开设置确认当前状态。"); }
+    finally { setVideoKeyBusy(false); }
+  }
+
   async function checkVoice() {
     if (!inTauri || voiceBusy) return;
     setVoiceBusy(true);
@@ -417,6 +443,8 @@ function SettingsApp() {
     }
     if (keyRef.current) keyRef.current.value = "";
     setKeyDirty(false); setKeyError(""); setKeyNotice("");
+    if (videoKeyRef.current) videoKeyRef.current.value = "";
+    setVideoKeyDirty(false); setVideoKeyError(""); setVideoKeyNotice("");
     if (!inTauri) { location.search = "?view=pet"; return; }
     try { await invoke("hide_settings"); }
     catch { setNotice("无法关闭设置窗；可以使用窗口标题栏的关闭按钮。"); }
@@ -424,6 +452,8 @@ function SettingsApp() {
 
   const credentialTone = !inTauri ? "preview" : status?.agent === "ready" ? "ready" : status?.agent === "failed" ? "error" : "empty";
   const credentialLabel = !inTauri ? "浏览器预览" : status?.agent === "ready" ? "已配置" : status?.agent === "failed" ? "安全存储不可用" : "尚未配置";
+  const videoCredentialTone = !inTauri ? "preview" : status?.video === "ready" ? "ready" : status?.video === "failed" ? "error" : "empty";
+  const videoCredentialLabel = !inTauri ? "浏览器预览" : status?.video === "ready" ? "已配置" : status?.video === "failed" ? "安全存储不可用" : "尚未配置";
 
   return <main className="settings-shell" onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); void closeSettings(); } }}>
     <section className="settings-card" aria-label="菲比助手设置">
@@ -505,6 +535,22 @@ function SettingsApp() {
             <p id="key-help" className="field-help">只写入本机系统钥匙串／凭证管理器；不保存在项目文件、聊天历史或安装包中，且不会回显。</p>
             {keyError && <p id="key-error" className="key-error" role="alert">{keyError}</p>}
             {keyNotice && <p className="key-notice" role="status">{keyNotice}</p>}
+          </fieldset>
+        </form>
+        <form className="key-form" onSubmit={saveVideoKey}>
+          <fieldset className="settings-group" disabled={!inTauri || videoKeyBusy}>
+            <legend>DashScope API Key（视频分析）</legend>
+            <div className="settings-detail key-status"><span>本机凭证</span><strong className={`status-pill is-${videoCredentialTone}`}><span aria-hidden="true" />{videoCredentialLabel}</strong></div>
+            <label htmlFor="dashscope-key">输入新密钥{status?.video === "ready" ? "（替换现有密钥）" : ""}</label>
+            <div className="key-controls">
+              <input id="dashscope-key" ref={videoKeyRef} type="password" maxLength={4096} autoComplete="off" autoCapitalize="off" spellCheck={false}
+                onChange={event => { setVideoKeyDirty(Boolean(event.currentTarget.value)); setVideoKeyError(""); setVideoKeyNotice(""); }}
+                aria-invalid={Boolean(videoKeyError)} aria-describedby={videoKeyError ? "video-key-error" : "video-key-help"} placeholder="粘贴阿里云百炼 DashScope API Key" />
+              <button type="submit" disabled={!videoKeyDirty || videoKeyBusy}>{videoKeyBusy ? "保存中…" : "保存密钥"}</button>
+            </div>
+            <p id="video-key-help" className="field-help">用于视频分析工具（Qwen-VL-Max）；与 DeepSeek 密钥分开保存，同样只写入本机系统钥匙串，不回显。</p>
+            {videoKeyError && <p id="video-key-error" className="key-error" role="alert">{videoKeyError}</p>}
+            {videoKeyNotice && <p className="key-notice" role="status">{videoKeyNotice}</p>}
           </fieldset>
         </form>
         <fieldset className="settings-group"><legend>启动</legend>

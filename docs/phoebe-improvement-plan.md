@@ -88,6 +88,7 @@
 
 详见 README「尚未完成的功能」。摘要：
 
+- **视频分析（路径 C）**：本地抽帧 + 按需取图 + 分段预算，让 Agent 迭代分析长视频（如 FPS 对枪）。设计见 [视频分析方案](phoebe-video-plan.md)。
 - **语音输入**：按住说话、麦克风录音、ASR（macOS 用 mlx-whisper / Windows 用 faster-whisper 或 whisper.cpp）。
 - **流式 / 分句 TTS 队列** 与 **逐句表情切换**；免提抢话、回声消除。
 - **稳定显示器标识**：同型号多屏场景下重启恢复到正确屏幕。

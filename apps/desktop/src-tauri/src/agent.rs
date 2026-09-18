@@ -234,6 +234,14 @@ pub fn key_status(store: &crate::secure_store::SecureStore) -> &'static str {
     }
 }
 
+pub fn video_key_status(store: &crate::secure_store::SecureStore) -> &'static str {
+    match store.video_key() {
+        Ok(Some(_)) => "ready",
+        Ok(None) => "not_configured",
+        Err(_) => "failed",
+    }
+}
+
 fn validate_prompt(run_id: &str, text: &str) -> Result<(), String> {
     if run_id.is_empty()
         || run_id.len() > 100

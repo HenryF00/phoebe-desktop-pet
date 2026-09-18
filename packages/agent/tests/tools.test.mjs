@@ -30,7 +30,7 @@ test("file tools expose the current attachment; location goes through the broker
   const tools = createAgentTools({ getContext: () => context, fetchImpl: async () => ({ ok: true, text: async () => sample }) });
   assert.deepEqual(tools.map(tool => tool.name),
     ["web_search", "read_selected_file", "get_device_location", "get_current_time", "get_system_status", "open_url",
-      "list_granted_folders", "list_directory", "read_text_file", "search_files",
+      "list_granted_folders", "list_directory", "read_text_file", "search_files", "analyze_video",
       "write_file", "move_file", "delete_file",
       "list_installed_apps", "launch_application", "focus_application", "reveal_file", "open_file_with_application",
       "browser_open", "browser_snapshot", "browser_click", "browser_type", "browser_select",

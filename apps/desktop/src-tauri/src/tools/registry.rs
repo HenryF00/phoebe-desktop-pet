@@ -158,6 +158,18 @@ struct OpenFileWithApplicationArgs {
     app_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VideoAnalyzeArgs {
+    grant_id: String,
+    relative_path: String,
+    question: String,
+    #[serde(default)]
+    start_sec: Option<f64>,
+    #[serde(default)]
+    end_sec: Option<f64>,
+}
+
 #[derive(Debug)]
 pub enum Parsed {
     Empty,
@@ -187,6 +199,7 @@ pub enum Parsed {
     LaunchWutheringWaves,
     ReadSystemFile { path: String },
     WriteSystemFile { path: String, content: String },
+    VideoAnalyze { grant_id: String, relative_path: String, question: String, start_sec: Option<f64>, end_sec: Option<f64> },
 }
 
 /// Description shown to the human in the approval dialog. Never sent to the model.
@@ -234,6 +247,7 @@ pub enum Tool {
     LaunchWutheringWaves,
     ReadSystemFile,
     WriteSystemFile,
+    VideoAnalyze,
 }
 
 const MAX_READ_BYTES: u64 = 32 * 1024;
@@ -244,7 +258,7 @@ const DEFAULT_LIST_ENTRIES: u32 = 200;
 const MAX_SEARCH_RESULTS: u32 = 50;
 const DEFAULT_SEARCH_RESULTS: u32 = 20;
 const SEARCH_MAX_DEPTH: usize = 4;
-const SEARCH_SCAN_LIMIT: usize = 2000;
+const SEARCH_SCAN_LIMIT: usize = 10000;
 const SEARCH_CONTENT_BYTES: u64 = 64 * 1024;
 const MAX_WRITE_BYTES: u64 = 256 * 1024;
 const MAX_SYSTEM_READ_BYTES: u64 = 64 * 1024;
@@ -282,6 +296,7 @@ impl Tool {
             "launch_wuthering_waves" => Some(Self::LaunchWutheringWaves),
             "read_system_file" => Some(Self::ReadSystemFile),
             "write_system_file" => Some(Self::WriteSystemFile),
+            "analyze_video" => Some(Self::VideoAnalyze),
             _ => None,
         }
     }
@@ -317,6 +332,7 @@ impl Tool {
             Self::LaunchWutheringWaves => "launch_wuthering_waves",
             Self::ReadSystemFile => "read_system_file",
             Self::WriteSystemFile => "write_system_file",
+            Self::VideoAnalyze => "analyze_video",
         }
     }
 
@@ -569,6 +585,21 @@ impl Tool {
                     app_id: validate_app_id(&parsed.app_id)?,
                 })
             }
+            Self::VideoAnalyze => {
+                let parsed: VideoAnalyzeArgs = serde_json::from_value(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                let question = parsed.question.trim().to_owned();
+                if question.is_empty() || question.chars().count() > 2000 {
+                    return Err("分析问题应为 1 到 2000 个字符".to_owned());
+                }
+                Ok(Parsed::VideoAnalyze {
+                    grant_id: validate_grant_id(&parsed.grant_id)?,
+                    relative_path: validate_non_empty_relative(&parsed.relative_path)?,
+                    question,
+                    start_sec: validate_window_sec(parsed.start_sec)?,
+                    end_sec: validate_window_sec(parsed.end_sec)?,
+                })
+            }
         }
     }
 
@@ -586,6 +617,7 @@ impl Tool {
             | Parsed::DeleteFile { grant_id, .. }
             | Parsed::RevealFile { grant_id, .. }
             | Parsed::OpenFileWithApplication { grant_id, .. } => Some(format!("folder:{grant_id}")),
+            Parsed::VideoAnalyze { grant_id, .. } => Some(format!("folder:{grant_id}")),
             Parsed::LaunchApplication { app_id } | Parsed::FocusApplication { app_id } => {
                 Some(format!("app:{app_id}"))
             }
@@ -600,7 +632,8 @@ impl Tool {
             | Parsed::ReadTextFile { grant_id, .. }
             | Parsed::SearchFiles { grant_id, .. }
             | Parsed::RevealFile { grant_id, .. }
-            | Parsed::OpenFileWithApplication { grant_id, .. } => Some(GrantRequirement {
+            | Parsed::OpenFileWithApplication { grant_id, .. }
+            | Parsed::VideoAnalyze { grant_id, .. } => Some(GrantRequirement {
                 grant_id: grant_id.clone(),
                 write: false,
             }),
@@ -832,6 +865,19 @@ impl Tool {
                     preview: None,
                 })
             }
+            (Self::VideoAnalyze, Parsed::VideoAnalyze { relative_path, question, start_sec, end_sec, .. }) => {
+                let path = resolve_read(ctx, relative_path)?;
+                let window = describe_window(start_sec, end_sec);
+                Ok(Describe {
+                    target: path.display().to_string(),
+                    impact: format!(
+                        "上传视频到阿里云百炼 Qwen-VL-Max 分析；视频将离开本机（相对路径 {}，分析窗口 {}）",
+                        display_relative(relative_path),
+                        window
+                    ),
+                    preview: Some(format!("分析问题：{question}")),
+                })
+            }
             _ => Err("工具参数不匹配".to_owned()),
         }
     }
@@ -913,6 +959,16 @@ impl Tool {
             }
             (Self::OpenFileWithApplication, Parsed::OpenFileWithApplication { relative_path, .. }) => {
                 open_file_with_application(ctx, relative_path)
+            }
+            (Self::VideoAnalyze, Parsed::VideoAnalyze { relative_path, question, start_sec, end_sec, .. }) => {
+                let path = resolve_read(ctx, relative_path)?;
+                let key = ctx
+                    .app
+                    .state::<crate::secure_store::SecureStore>()
+                    .video_key()
+                    .map_err(str::to_owned)?
+                    .ok_or("尚未配置 DashScope API Key；请在设置中配置")?;
+                super::video::analyze_video(&path, *start_sec, *end_sec, question, &key).map(ToolOutcome::success)
             }
             (Self::BrowserOpen, Parsed::BrowserOpen { url, .. }) => {
                 browser_request(ctx, serde_json::json!({ "type": "open", "url": url }))
@@ -1109,6 +1165,23 @@ fn validate_non_empty_relative(value: &str) -> Result<String, String> {
     Ok(validated)
 }
 
+fn validate_window_sec(value: Option<f64>) -> Result<Option<f64>, String> {
+    match value {
+        None => Ok(None),
+        Some(sec) if sec.is_finite() && sec >= 0.0 => Ok(Some(sec)),
+        Some(_) => Err("时间参数无效".to_owned()),
+    }
+}
+
+fn describe_window(start_sec: &Option<f64>, end_sec: &Option<f64>) -> String {
+    match (start_sec, end_sec) {
+        (Some(start), Some(end)) => format!("{start:.1}–{end:.1} 秒"),
+        (Some(start), None) => format!("{start:.1} 秒起"),
+        (None, Some(end)) => format!("0–{end:.1} 秒"),
+        (None, None) => "整段".to_owned(),
+    }
+}
+
 fn display_relative(value: &str) -> String {
     if value.trim().is_empty() {
         "（授权目录根）".to_owned()
@@ -1271,6 +1344,10 @@ fn walk_search(
     let Ok(reader) = std::fs::read_dir(dir) else {
         return;
     };
+    // Breadth-first within this directory: match every file here before
+    // descending into subdirectories, so a file sitting at the grant root is
+    // never starved by a large subdirectory consuming the scan budget.
+    let mut subdirs: Vec<PathBuf> = Vec::new();
     for entry in reader.flatten() {
         if hits.len() >= max_results || *scanned >= SEARCH_SCAN_LIMIT {
             return;
@@ -1289,7 +1366,7 @@ fn walk_search(
         }
         *scanned += 1;
         if file_type.is_dir() {
-            walk_search(root, &entry.path(), needle, depth + 1, max_results, scanned, hits);
+            subdirs.push(entry.path());
             continue;
         }
         if !file_type.is_file() {
@@ -1319,6 +1396,12 @@ fn walk_search(
                 "contentMatch": content_match,
             }));
         }
+    }
+    for subdir in subdirs {
+        if hits.len() >= max_results || *scanned >= SEARCH_SCAN_LIMIT {
+            return;
+        }
+        walk_search(root, &subdir, needle, depth + 1, max_results, scanned, hits);
     }
 }
 

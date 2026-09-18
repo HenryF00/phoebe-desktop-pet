@@ -2,28 +2,33 @@ use std::sync::Mutex;
 
 const SERVICE: &str = "local.phoebe.assistant";
 const ACCOUNT: &str = "deepseek-api-key";
+const VIDEO_ACCOUNT: &str = "dashscope-api-key";
 
 type CachedKey = Result<Option<String>, &'static str>;
 
 #[derive(Default)]
 pub struct SecureStore {
     cached_key: Mutex<Option<CachedKey>>,
+    cached_video_key: Mutex<Option<CachedKey>>,
 }
 
-fn entry() -> Result<keyring::Entry, &'static str> {
-    keyring::Entry::new(SERVICE, ACCOUNT).map_err(|_| "无法访问系统安全存储")
+fn entry(account: &str) -> Result<keyring::Entry, &'static str> {
+    keyring::Entry::new(SERVICE, account).map_err(|_| "无法访问系统安全存储")
 }
 
-fn stored_key() -> Result<Option<String>, &'static str> {
-    match entry()?.get_password() {
+fn stored_key(account: &str, label: &'static str) -> Result<Option<String>, &'static str> {
+    match entry(account)?.get_password() {
         Ok(value) if !value.trim().is_empty() => Ok(Some(value)),
         Ok(_) | Err(keyring::Error::NoEntry) => Ok(None),
-        Err(_) => Err("无法读取系统安全存储中的 DeepSeek 密钥"),
+        Err(_) => Err(match label {
+            "DeepSeek" => "无法读取系统安全存储中的 DeepSeek 密钥",
+            _ => "无法读取系统安全存储中的 DashScope 密钥",
+        }),
     }
 }
 
 fn load_effective_key() -> CachedKey {
-    match stored_key()? {
+    match stored_key(ACCOUNT, "DeepSeek")? {
         Some(key) => Ok(Some(key)),
         None => {
             #[cfg(debug_assertions)]
@@ -40,38 +45,80 @@ fn load_effective_key() -> CachedKey {
     }
 }
 
+fn load_effective_video_key() -> CachedKey {
+    match stored_key(VIDEO_ACCOUNT, "DashScope")? {
+        Some(key) => Ok(Some(key)),
+        None => {
+            #[cfg(debug_assertions)]
+            {
+                Ok(std::env::var("DASHSCOPE_API_KEY")
+                    .ok()
+                    .filter(|key| !key.trim().is_empty()))
+            }
+            #[cfg(not(debug_assertions))]
+            {
+                Ok(None)
+            }
+        }
+    }
+}
+
 impl SecureStore {
     pub fn effective_key(&self) -> CachedKey {
-        self.effective_key_with(load_effective_key)
+        self.cached_with(&self.cached_key, load_effective_key)
     }
 
-    fn effective_key_with<F>(&self, loader: F) -> CachedKey
+    /// Key for the DashScope video analysis backend (Qwen-VL-Max), stored in the
+    /// same system keyring but under a separate account so it never collides
+    /// with the DeepSeek key.
+    pub fn video_key(&self) -> CachedKey {
+        self.cached_with(&self.cached_video_key, load_effective_video_key)
+    }
+
+    fn cached_with<F>(&self, cache: &Mutex<Option<CachedKey>>, loader: F) -> CachedKey
     where
         F: FnOnce() -> CachedKey,
     {
-        let mut cache = self.cached_key.lock().map_err(|_| "安全存储缓存不可用")?;
-        if let Some(cached) = cache.as_ref() {
+        let mut guard = cache.lock().map_err(|_| "安全存储缓存不可用")?;
+        if let Some(cached) = guard.as_ref() {
             return cached.clone();
         }
         let loaded = loader();
-        *cache = Some(loaded.clone());
+        *guard = Some(loaded.clone());
         loaded
+    }
+
+    pub fn effective_key_with<F>(&self, loader: F) -> CachedKey
+    where
+        F: FnOnce() -> CachedKey,
+    {
+        self.cached_with(&self.cached_key, loader)
     }
 
     pub fn set_key(&self, value: &str) -> Result<(), &'static str> {
         validate_key(value)?;
         let key = value.trim().to_owned();
-        entry()?
+        entry(ACCOUNT)?
             .set_password(&key)
             .map_err(|_| "无法保存 DeepSeek 密钥到系统安全存储")?;
         *self.cached_key.lock().map_err(|_| "安全存储缓存不可用")? = Some(Ok(Some(key)));
+        Ok(())
+    }
+
+    pub fn set_video_key(&self, value: &str) -> Result<(), &'static str> {
+        validate_key(value)?;
+        let key = value.trim().to_owned();
+        entry(VIDEO_ACCOUNT)?
+            .set_password(&key)
+            .map_err(|_| "无法保存 DashScope 密钥到系统安全存储")?;
+        *self.cached_video_key.lock().map_err(|_| "安全存储缓存不可用")? = Some(Ok(Some(key)));
         Ok(())
     }
 }
 
 fn validate_key(value: &str) -> Result<(), &'static str> {
     if value.trim().is_empty() || value.trim().len() > 4096 || value.chars().any(char::is_control) {
-        return Err("DeepSeek 密钥长度无效");
+        return Err("API Key 长度无效");
     }
     Ok(())
 }
