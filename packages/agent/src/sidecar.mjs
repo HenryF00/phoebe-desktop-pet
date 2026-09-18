@@ -43,13 +43,18 @@ function toolsForTurn(allowed) {
   return selectAgentTools(getAllAgentTools(), allowed);
 }
 
-function systemPromptFor(memories = [], interactionMode = "assistant", allowed = SAFE_DEFAULT_TOOLS, folderGrants = []) {
-  return buildSystemPrompt({
+function systemPromptFor(memories = [], interactionMode = "assistant", allowed = SAFE_DEFAULT_TOOLS, folderGrants = [], occasion = null, userAddress = "") {
+  const prompt = buildSystemPrompt({
     memories,
     interactionMode,
     capabilities: toolsForTurn(allowed).map(({ name, description }) => ({ name, description })),
     folderGrants,
+    userAddress,
   });
+  if (occasion === "birthday") {
+    return `${prompt}\n\n【今天是你主人（用户）的生日】请先用菲比温暖、真诚的口吻送上一句走心的生日祝福（1~2 句，符合人设与上面的真实性与边界），再自然地处理用户的请求。不要提及这是一条系统提示。`;
+  }
+  return prompt;
 }
 
 function getAgent() {
@@ -119,6 +124,18 @@ function requestTool(tool, args, signal, runId) {
   });
 }
 
+function stripImageBlocks(messages) {
+  return messages.map(message => {
+    if (!Array.isArray(message.content)) return message;
+    if (!message.content.some(block => block?.type === "image")) return message;
+    const textBlocks = message.content.filter(block => block?.type !== "image");
+    return {
+      ...message,
+      content: [...textBlocks, { type: "text", text: "（用户此前附带的图片已省略，不再重复发送）" }],
+    };
+  });
+}
+
 async function handle(command) {
   if (command.type === "tool_result") {
     const pending = pendingTools.get(command.requestId);
@@ -171,19 +188,23 @@ async function handle(command) {
   }, 120_000);
   try {
     const currentAgent = getAgent();
-    currentAgent.state.systemPrompt = systemPromptFor(command.memories, command.interactionMode, allowed, command.folderGrants || []);
+    currentAgent.state.systemPrompt = systemPromptFor(command.memories, command.interactionMode, allowed, command.folderGrants || [], command.occasion, command.userAddress);
     currentAgent.state.tools = toolsForTurn(allowed);
     currentAgent.state.messages = await compactIfNeeded(currentAgent.state.messages, models, model);
     const startingMessages = pruneMessages(currentAgent.state.messages);
     currentAgent.state.messages = startingMessages;
     sendContextUsage(run.runId, startingMessages);
-    await currentAgent.prompt(command.text);
+    const images = command.image
+      ? command.image.frames.map(frame => ({ type: "image", data: frame.data, mimeType: frame.mimeType }))
+      : undefined;
+    await currentAgent.prompt(command.text, images);
     if (run.timedOut) send({ type: "error", runId: run.runId, message: "模型回复超时；请重试" });
     else if (run.cancelled) send({ type: "cancelled", runId: run.runId });
     else if (agent.state.errorMessage) send({ type: "error", runId: run.runId, message: describeFailure({
       lastAssistant: lastAssistantMessage(agent), errorMessage: agent.state.errorMessage, contextWindow: model.contextWindow }) });
     else {
-      const motion = inferReplyMotion({ replyText: run.text, userText: run.userText, usedTool: run.usedTool });
+      const inferred = inferReplyMotion({ replyText: run.text, userText: run.userText, usedTool: run.usedTool });
+      const motion = command.occasion === "birthday" ? { ...inferred, emotion: "happy" } : inferred;
       const displayText = run.text.trim();
       send({ type: "completed", runId: run.runId, reply: {
         display_text: displayText,
@@ -202,7 +223,9 @@ async function handle(command) {
     clearTimeout(timeout);
     abortPending(run.runId);
     if (agent && !agent.state.isStreaming) {
-      const finalMessages = command.file ? [] : pruneMessages(agent.state.messages);
+      const base = command.file ? [] : pruneMessages(agent.state.messages);
+      // Never keep image base64 in the transcript: it would be re-sent every turn.
+      const finalMessages = command.image ? stripImageBlocks(base) : base;
       agent.state.messages = finalMessages;
       sendContextUsage(run.runId, finalMessages);
     }

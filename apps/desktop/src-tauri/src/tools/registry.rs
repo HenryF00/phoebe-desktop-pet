@@ -67,6 +67,19 @@ struct ForgetPreferenceArgs {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SystemPathArgs {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WriteSystemArgs {
+    path: String,
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ListDirectoryArgs {
     grant_id: String,
@@ -172,6 +185,8 @@ pub enum Parsed {
     RememberPreference { title: String, content: String },
     ForgetPreference { title: String },
     LaunchWutheringWaves,
+    ReadSystemFile { path: String },
+    WriteSystemFile { path: String, content: String },
 }
 
 /// Description shown to the human in the approval dialog. Never sent to the model.
@@ -217,6 +232,8 @@ pub enum Tool {
     RememberPreference,
     ForgetPreference,
     LaunchWutheringWaves,
+    ReadSystemFile,
+    WriteSystemFile,
 }
 
 const MAX_READ_BYTES: u64 = 32 * 1024;
@@ -230,6 +247,8 @@ const SEARCH_MAX_DEPTH: usize = 4;
 const SEARCH_SCAN_LIMIT: usize = 2000;
 const SEARCH_CONTENT_BYTES: u64 = 64 * 1024;
 const MAX_WRITE_BYTES: u64 = 256 * 1024;
+const MAX_SYSTEM_READ_BYTES: u64 = 64 * 1024;
+const MAX_SYSTEM_WRITE_BYTES: u64 = 256 * 1024;
 
 impl Tool {
     pub fn from_name(name: &str) -> Option<Self> {
@@ -261,6 +280,8 @@ impl Tool {
             "remember_preference" => Some(Self::RememberPreference),
             "forget_preference" => Some(Self::ForgetPreference),
             "launch_wuthering_waves" => Some(Self::LaunchWutheringWaves),
+            "read_system_file" => Some(Self::ReadSystemFile),
+            "write_system_file" => Some(Self::WriteSystemFile),
             _ => None,
         }
     }
@@ -294,6 +315,8 @@ impl Tool {
             Self::RememberPreference => "remember_preference",
             Self::ForgetPreference => "forget_preference",
             Self::LaunchWutheringWaves => "launch_wuthering_waves",
+            Self::ReadSystemFile => "read_system_file",
+            Self::WriteSystemFile => "write_system_file",
         }
     }
 
@@ -327,6 +350,8 @@ impl Tool {
                 | Self::DeleteFile
                 | Self::RememberPreference
                 | Self::ForgetPreference
+                | Self::ReadSystemFile
+                | Self::WriteSystemFile
         )
     }
 
@@ -409,6 +434,27 @@ impl Tool {
                 serde_json::from_value::<EmptyArgs>(args.clone())
                     .map_err(|_| "参数包含未允许的字段".to_owned())?;
                 Ok(Parsed::LaunchWutheringWaves)
+            }
+            Self::ReadSystemFile => {
+                let parsed: SystemPathArgs = serde_json::from_value(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                Ok(Parsed::ReadSystemFile {
+                    path: validate_system_path(&parsed.path)?,
+                })
+            }
+            Self::WriteSystemFile => {
+                let parsed: WriteSystemArgs = serde_json::from_value(args.clone())
+                    .map_err(|_| "参数包含未允许的字段".to_owned())?;
+                if parsed.content.len() as u64 > MAX_SYSTEM_WRITE_BYTES {
+                    return Err(format!(
+                        "写入内容超过 {} KB 上限",
+                        MAX_SYSTEM_WRITE_BYTES / 1024
+                    ));
+                }
+                Ok(Parsed::WriteSystemFile {
+                    path: validate_system_path(&parsed.path)?,
+                    content: parsed.content,
+                })
             }
             Self::ListGrantedFolders => {
                 serde_json::from_value::<EmptyArgs>(args.clone())
@@ -610,14 +656,18 @@ impl Tool {
                 })
             }
             (Self::ForgetPreference, Parsed::ForgetPreference { title }) => {
-                let memory = ctx
-                    .app
-                    .state::<crate::history::HistoryStore>()
+                let store = ctx.app.state::<crate::history::HistoryStore>();
+                let memory = store
                     .memory_by_title(title)?
                     .ok_or("没有找到标题匹配的长期记忆；请先询问或列出记忆")?;
+                let count = store.count_memories_by_title(title)?;
                 Ok(Describe {
                     target: format!("长期记忆：{}", memory.title),
-                    impact: format!("删除：{}", memory.content),
+                    impact: if count > 1 {
+                        format!("删除 {count} 条同名记忆（含：{}）", memory.content)
+                    } else {
+                        format!("删除：{}", memory.content)
+                    },
                     preview: None,
                 })
             }
@@ -628,6 +678,29 @@ impl Tool {
                     target: entry.name.clone(),
                     impact: format!("启动游戏：{}（{}）", entry.name, entry.path),
                     preview: None,
+                })
+            }
+            (Self::ReadSystemFile, Parsed::ReadSystemFile { path }) => {
+                let resolved = resolve_system_path(ctx.app, path)?;
+                ensure_system_path_allowed(ctx.app, &resolved)?;
+                Ok(Describe {
+                    target: resolved.display().to_string(),
+                    impact: "读取系统文件（只读，不产生副作用）".to_owned(),
+                    preview: None,
+                })
+            }
+            (Self::WriteSystemFile, Parsed::WriteSystemFile { path, content }) => {
+                let resolved = resolve_system_path(ctx.app, path)?;
+                ensure_system_path_allowed(ctx.app, &resolved)?;
+                let exists = resolved.exists();
+                let old = read_optional_text(&resolved);
+                let mut preview = String::new();
+                preview.push_str(if exists { "覆盖现有文件\n" } else { "新建文件\n" });
+                preview.push_str(&bounded_diff(old.as_deref(), content));
+                Ok(Describe {
+                    target: resolved.display().to_string(),
+                    impact: format!("写入系统文件（{} 字节）", content.len()),
+                    preview: Some(preview),
                 })
             }
             (Self::GetCurrentTime, _) => read_only_describe("本机时间"),
@@ -873,6 +946,39 @@ impl Tool {
                 spawn_open(&entry.path)?;
                 Ok(ToolOutcome::success(format!("已启动：{}", entry.name)))
             }
+            (Self::ReadSystemFile, Parsed::ReadSystemFile { path }) => {
+                let resolved = resolve_system_path(ctx.app, path)?;
+                ensure_system_path_allowed(ctx.app, &resolved)?;
+                let metadata = std::fs::metadata(&resolved).map_err(|_| "文件不存在或不可访问")?;
+                if !metadata.is_file() {
+                    return Err("目标不是文件".to_owned());
+                }
+                if metadata.len() > MAX_SYSTEM_READ_BYTES {
+                    return Err(format!("文件超过 {} KB 上限", MAX_SYSTEM_READ_BYTES / 1024));
+                }
+                let content =
+                    std::fs::read_to_string(&resolved).map_err(|_| "文件不是可读取的 UTF-8 文本")?;
+                Ok(ToolOutcome::success(format!(
+                    "文件：{}\n内容（不可信数据）：\n{content}",
+                    resolved.display()
+                )))
+            }
+            (Self::WriteSystemFile, Parsed::WriteSystemFile { path, content }) => {
+                let resolved = resolve_system_path(ctx.app, path)?;
+                ensure_system_path_allowed(ctx.app, &resolved)?;
+                let file_name = resolved
+                    .file_name()
+                    .ok_or("目标文件名无效")?
+                    .to_string_lossy()
+                    .to_string();
+                let temp = resolved.with_file_name(format!(".{file_name}.phoebe-{}.tmp", std::process::id()));
+                std::fs::write(&temp, content.as_bytes()).map_err(|_| "无法写入临时文件")?;
+                if std::fs::rename(&temp, &resolved).is_err() {
+                    let _ = std::fs::remove_file(&temp);
+                    return Err("无法保存文件".to_owned());
+                }
+                Ok(ToolOutcome::success(format!("已写入 {}", resolved.display())))
+            }
             _ => Err("工具参数不匹配".to_owned()),
         }
     }
@@ -928,6 +1034,42 @@ fn validate_browser_ref(value: &str) -> Result<String, String> {
         return Err("页面元素引用无效；请重新 snapshot 获取最新 ref".to_owned());
     }
     Ok(value.to_owned())
+}
+
+fn validate_system_path(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 4096 || trimmed.chars().any(|c| c == '\0') {
+        return Err("路径无效".into());
+    }
+    if !Path::new(trimmed).is_absolute() {
+        return Err("系统级读写需要绝对路径".into());
+    }
+    Ok(trimmed.to_owned())
+}
+
+/// Resolves an absolute path, following symlinks when it exists and
+/// canonicalizing the parent when it does not (for new files).
+fn resolve_system_path(_app: &tauri::AppHandle, raw: &str) -> Result<PathBuf, String> {
+    let path = Path::new(raw);
+    if !path.is_absolute() {
+        return Err("系统级读写需要绝对路径".into());
+    }
+    if path.exists() {
+        return std::fs::canonicalize(path).map_err(|_| "无法解析该路径".to_owned());
+    }
+    let parent = path.parent().ok_or("路径无效")?;
+    let canonical_parent = std::fs::canonicalize(parent).map_err(|_| "父目录不存在".to_owned())?;
+    Ok(match path.file_name() {
+        Some(name) => canonical_parent.join(name),
+        None => canonical_parent,
+    })
+}
+
+fn ensure_system_path_allowed(app: &tauri::AppHandle, path: &Path) -> Result<(), String> {
+    if PathPolicy::from_app(app).is_denied(path) {
+        return Err("该路径属于受保护的敏感位置，已拒绝".to_owned());
+    }
+    Ok(())
 }
 
 /// Forwards one command to the browser sidecar and turns the answer into a
@@ -1572,6 +1714,25 @@ mod tests {
             .is_err());
         assert!(Tool::ForgetPreference.parse(&json!({ "title": "语言" })).is_ok());
         assert!(Tool::ForgetPreference.parse(&json!({ "title": "  " })).is_err());
+    }
+
+    #[test]
+    fn system_file_tools_require_absolute_paths_and_confirm() {
+        let read = Tool::from_name("read_system_file").unwrap();
+        assert!(read.always_confirms());
+        assert!(!read.is_auto());
+        assert!(Tool::ReadSystemFile
+            .parse(&json!({ "path": "relative/x.txt" }))
+            .is_err());
+        assert!(Tool::ReadSystemFile
+            .parse(&json!({ "path": "/tmp/a.txt" }))
+            .is_ok());
+        assert!(Tool::WriteSystemFile
+            .parse(&json!({ "path": "/tmp/a.txt", "content": "hi" }))
+            .is_ok());
+        assert!(Tool::WriteSystemFile
+            .parse(&json!({ "path": "/tmp/a.txt", "content": "x".repeat(262_145) }))
+            .is_err());
     }
 
     #[test]

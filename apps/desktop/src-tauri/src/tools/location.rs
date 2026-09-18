@@ -46,7 +46,8 @@ fn current_location_impl(app: &tauri::AppHandle) -> Result<CoarseLocation, Strin
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use std::sync::{mpsc, Mutex, OnceLock};
+    use std::cell::RefCell;
+    use std::sync::mpsc;
 
     use objc2::rc::Retained;
     use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
@@ -58,20 +59,29 @@ mod macos {
 
     pub type Pending = mpsc::Sender<Result<(f64, f64, f64), String>>;
 
-    /// The one in-flight request. Only accessed from the main thread: the
-    /// request is started via `run_on_main_thread` and finished from the
-    /// delegate callback, which CoreLocation also delivers on the main thread.
-    fn pending() -> &'static Mutex<Option<Pending>> {
-        static PENDING: OnceLock<Mutex<Option<Pending>>> = OnceLock::new();
-        PENDING.get_or_init(|| Mutex::new(None))
+    #[allow(dead_code)] // manager/delegate are held to stay alive, not read directly.
+    struct ActiveLocation {
+        manager: Retained<CLLocationManager>,
+        delegate: Retained<PhoebeLocationDelegate>,
+        sender: Pending,
+    }
+
+    // The one in-flight request. Only accessed from the main thread: the
+    // request is started via `run_on_main_thread` and finished from the
+    // delegate callback, which CoreLocation also delivers on the main thread.
+    // `CLLocationManager` is `MainThreadOnly`, so this lives in a thread-local
+    // rather than a `static Mutex`. Keeping the manager and delegate here
+    // (instead of leaking them) lets the next request drop the previous one.
+    thread_local! {
+        static ACTIVE: RefCell<Option<ActiveLocation>> = const { RefCell::new(None) };
     }
 
     fn finish(result: Result<(f64, f64, f64), String>) {
-        if let Ok(mut guard) = pending().lock() {
-            if let Some(sender) = guard.take() {
-                let _ = sender.send(result);
+        ACTIVE.with(|cell| {
+            if let Some(active_request) = cell.borrow().as_ref() {
+                let _ = active_request.sender.send(result);
             }
-        }
+        });
     }
 
     fn request_location(manager: &CLLocationManager) {
@@ -143,18 +153,21 @@ mod macos {
             }
             _ => {}
         }
-        *pending().lock().unwrap() = Some(sender);
         let delegate = PhoebeLocationDelegate::new();
         unsafe {
             manager.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
             request_location(&manager);
         }
-        // The delegate is a weak property on the manager, and the location
-        // arrives asynchronously after this function returns. Keep both alive;
-        // the frequency is one or two per conversation, so this tiny leak is
-        // intentional and bounded in practice.
-        std::mem::forget(manager);
-        std::mem::forget(delegate);
+        // Keep manager and delegate alive across the async delegate callback.
+        // The previous request (if any) is dropped here, so there is at most
+        // one retained pair at a time.
+        ACTIVE.with(|cell| {
+            *cell.borrow_mut() = Some(ActiveLocation {
+                manager,
+                delegate,
+                sender,
+            });
+        });
     }
 }
 

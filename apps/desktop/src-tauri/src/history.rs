@@ -341,6 +341,16 @@ fn memory_by_title(connection: &Connection, title: &str) -> Result<Option<Explic
         .map_err(|_| "无法读取长期记忆".to_owned())
 }
 
+fn count_memories_by_title(connection: &Connection, title: &str) -> Result<i64, String> {
+    connection
+        .query_row(
+            "SELECT COUNT(*) FROM memories WHERE title=?1 AND source='user_explicit'",
+            [title.trim()],
+            |row| row.get(0),
+        )
+        .map_err(|_| "无法读取长期记忆".to_owned())
+}
+
 fn open_at(path: &Path) -> Result<Connection, String> {
     let mut connection = Connection::open(path).map_err(|_| "无法打开历史数据库")?;
     initialize(&mut connection)?;
@@ -825,6 +835,10 @@ impl HistoryStore {
 
     pub fn memory_by_title(&self, title: &str) -> Result<Option<ExplicitMemory>, String> {
         self.with(|connection| memory_by_title(connection, title))
+    }
+
+    pub fn count_memories_by_title(&self, title: &str) -> Result<i64, String> {
+        self.with(|connection| count_memories_by_title(connection, title))
     }
 }
 

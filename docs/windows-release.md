@@ -92,6 +92,18 @@ npm install
 
 ### 3.3 生成语音包 + 打包 NSIS
 
+**方式 A：一键脚本（推荐）**
+
+在项目根目录运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1
+```
+
+脚本会自动：检查 Node/Rust/conda → 校验 GPT-SoVITS 权重与 conda 环境 → `npm ci` → 生成 Windows 语音包 → 打包 NSIS。
+
+**方式 B：手动执行**
+
 ```powershell
 $env:PHOEBE_GPTSOVITS_ROOT = "D:\GPT-SoVITS"
 $env:PHOEBE_GPTSOVITS_ENV = "$env:USERPROFILE\miniconda3\envs\GPTSoVits"

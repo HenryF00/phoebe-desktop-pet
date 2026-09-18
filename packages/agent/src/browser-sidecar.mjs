@@ -39,6 +39,7 @@ const CHROME_CANDIDATES = [
 ].filter(Boolean);
 
 const NAV_TIMEOUT_MS = 30_000;
+const MAX_SNAPSHOT_ITEMS = 200;
 const SNAPSHOT_SELECTOR =
   'a, button, input, select, textarea, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [contenteditable="true"]';
 
@@ -110,10 +111,11 @@ async function openUrl(url) {
 
 async function snapshot() {
   const target = await requirePage();
-  const data = await target.evaluate((selector) => {
+  const data = await target.evaluate(({ selector, maxItems }) => {
     const items = [];
     const nodes = document.querySelectorAll(selector);
-    nodes.forEach((node, index) => {
+    for (let index = 0; index < nodes.length && items.length < maxItems; index++) {
+      const node = nodes[index];
       const ref = `e${index}`;
       node.setAttribute("data-phoebe-ref", ref);
       const tag = node.tagName.toLowerCase();
@@ -126,7 +128,7 @@ async function snapshot() {
         (tag === "a" || tag === "button" ? node.textContent : node.value) ||
         "";
       const text = String(label).replace(/\s+/g, " ").trim();
-      if (!text && !role && !inputType) return;
+      if (!text && !role && !inputType) continue;
       items.push({
         ref,
         tag,
@@ -134,16 +136,17 @@ async function snapshot() {
         type: inputType,
         text: text.length > 80 ? `${text.slice(0, 80)}…` : text,
       });
-    });
+    }
     return {
       url: location.href,
       title: document.title,
       bodyTextLength: (document.body?.innerText || "").length,
       items,
+      truncated: nodes.length > maxItems,
     };
-  }, SNAPSHOT_SELECTOR);
+  }, { selector: SNAPSHOT_SELECTOR, maxItems: MAX_SNAPSHOT_ITEMS });
   return {
-    text: `页面快照：${data.title || data.url}（${data.items.length} 个可交互元素）`,
+    text: `页面快照：${data.title || data.url}（${data.items.length} 个可交互元素${data.truncated ? "，已截断" : ""}）`,
     details: data,
   };
 }

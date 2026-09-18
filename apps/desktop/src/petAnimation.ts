@@ -3,7 +3,7 @@ import type { AssistantReply, AssistantState } from "@phoebe/shared";
 
 export type InteractionMode = "assistant" | "chat";
 export type PetPreviewPose = "idle" | "blink" | "wave" | "auto";
-export type PetVoiceState = "synthesizing" | "speaking" | "idle" | "stopped" | "failed";
+export type PetVoiceState = "preparing" | "synthesizing" | "speaking" | "idle" | "stopped" | "failed";
 
 type PetFrame = { src: string; durationMs: number };
 type PetClip = { loop: boolean; motion: string; holdLastMs?: number; frames: PetFrame[] };
@@ -64,7 +64,7 @@ export function selectPetClip(input: {
   if (assistantState === "failed" || voiceState === "failed") return `${mode}-concerned`;
   if (cancelActive) return `${mode}-cancel`;
   if (assistantState === "tool_running") return `${mode}-tool`;
-  if (voiceState === "synthesizing" || assistantState === "thinking") return `${mode}-thinking`;
+  if (voiceState === "synthesizing" || voiceState === "preparing" || assistantState === "thinking") return `${mode}-thinking`;
   if (assistantState === "listening" || assistantState === "transcribing" || assistantState === "awaiting_approval") {
     return `${mode}-listening`;
   }

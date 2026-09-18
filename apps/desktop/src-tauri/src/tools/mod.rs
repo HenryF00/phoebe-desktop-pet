@@ -79,6 +79,8 @@ pub fn allowed_tools_for(interaction_mode: InteractionMode, action_mode: ActionM
                 "remember_preference",
                 "forget_preference",
                 "launch_wuthering_waves",
+                "read_system_file",
+                "write_system_file",
             ]
             .iter()
             .map(|name| (*name).to_owned()),

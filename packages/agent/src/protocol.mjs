@@ -3,8 +3,11 @@ import { ALL_TOOL_NAMES } from "./tools.mjs";
 
 const KNOWN_TOOLS = new Set(ALL_TOOL_NAMES);
 
+/** Largest command line. Images (base64) make the prompt line much bigger than text. */
+const MAX_COMMAND_BYTES = 8 * 1024 * 1024;
+
 export function parseCommand(line) {
-  if (typeof line !== "string" || line.length > 65536) throw new Error("invalid command size");
+  if (typeof line !== "string" || line.length > MAX_COMMAND_BYTES) throw new Error("invalid command size");
   let value;
   try { value = JSON.parse(line); } catch { throw new Error("invalid JSON"); }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid command");
@@ -57,7 +60,39 @@ export function parseCommand(line) {
           || Buffer.byteLength(value.file.content) > 20_000) throw new Error("invalid attached file");
       file = { name: value.file.name, content: value.file.content };
     }
+    let image = null;
+    if (value.image !== undefined && value.image !== null) {
+      const img = value.image;
+      if (!img || typeof img !== "object" || Array.isArray(img)
+          || typeof img.name !== "string" || !img.name.trim()
+          || Buffer.byteLength(img.name) > 240
+          || !Array.isArray(img.frames) || img.frames.length === 0 || img.frames.length > 6)
+        throw new Error("invalid attached image");
+      let total = 0;
+      const frames = img.frames.map(frame => {
+        if (!frame || typeof frame !== "object" || Array.isArray(frame)
+            || typeof frame.mimeType !== "string"
+            || !["image/png", "image/jpeg", "image/webp"].includes(frame.mimeType)
+            || typeof frame.data !== "string" || frame.data.length === 0
+            || frame.data.length > 3_000_000
+            || !/^[A-Za-z0-9+/]+=*$/.test(frame.data))
+          throw new Error("invalid attached image frame");
+        total += frame.data.length;
+        return { mimeType: frame.mimeType, data: frame.data };
+      });
+      if (total > 7_000_000) throw new Error("attached image too large");
+      image = { name: img.name, frames };
+    }
     let tools = null;
+    const occasion = value.occasion === "birthday" ? "birthday" : null;
+    let userAddress = "";
+    if (value.userAddress !== undefined && value.userAddress !== null) {
+      if (typeof value.userAddress !== "string") throw new Error("invalid user address");
+      const trimmed = value.userAddress.trim();
+      if (trimmed.length > 24 || Array.from(trimmed).some(ch => ch.charCodeAt(0) < 32))
+        throw new Error("invalid user address");
+      userAddress = trimmed;
+    }
     if (value.tools !== undefined && value.tools !== null) {
       if (!Array.isArray(value.tools) || value.tools.length > 64)
         throw new Error("invalid tool list");
@@ -83,7 +118,7 @@ export function parseCommand(line) {
         return { grantId: grant.grantId, label: grant.label, read: grant.read, write: grant.write };
       });
     }
-    const command = { type: "prompt", runId: value.runId, text: value.text, interactionMode, memories: checked, file };
+    const command = { type: "prompt", runId: value.runId, text: value.text, interactionMode, memories: checked, file, image, occasion, userAddress };
     if (tools) command.tools = tools;
     if (folderGrants) command.folderGrants = folderGrants;
     return command;

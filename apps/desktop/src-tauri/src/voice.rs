@@ -25,12 +25,15 @@ const HEALTH_ENDPOINT: &str = "http://127.0.0.1:9880/openapi.json";
 const GPT_WEIGHT: &str = "GPT_weights_v2/phoebe_zh_v2-e15.ckpt";
 const SOVITS_WEIGHT: &str = "SoVITS_weights_v2/phoebe_zh_v2_e8_s912.pth";
 const REFERENCE_NAME: &str = "021_自我介绍.wav";
+const BIRTHDAY_NAME: &str = "017_生日祝福.wav";
 const REFERENCE_TEXT: &str = "我是隐海修会的教士，菲比。岁主在上，愿你的旅途永远有爱与光明垂耀。";
 const MAX_SPEECH_BYTES: usize = 12_000;
 const MAX_WAV_BYTES: usize = 64 * 1024 * 1024;
 #[cfg_attr(debug_assertions, allow(dead_code))]
 const VOICE_RUNTIME_FORMAT: u8 = 1;
-const SERVER_START_TIMEOUT: Duration = Duration::from_secs(300);
+/// Budget for loading the model after the process is spawned. The runtime has
+/// already been expanded by then, so this is the CPU model-load budget.
+const SERVER_LOAD_TIMEOUT: Duration = Duration::from_secs(180);
 
 #[derive(Clone, Serialize)]
 pub struct VoiceEvent {
@@ -77,6 +80,8 @@ struct Playback {
     generation: u64,
     child: Arc<Mutex<Child>>,
     path: PathBuf,
+    /// Temporary synthesized files are deleted on stop; bundled clips are not.
+    remove_on_stop: bool,
 }
 
 struct ManagedServer {
@@ -265,7 +270,7 @@ fn validate_layout(layout: &RuntimeLayout, manifest: &VoiceRuntimeManifest) -> R
 }
 
 #[cfg(not(debug_assertions))]
-fn prepare_bundled_runtime(app: &AppHandle) -> Result<RuntimeLayout, String> {
+fn prepare_bundled_runtime(app: &AppHandle, generation: u64) -> Result<RuntimeLayout, String> {
     let resource_dir = app
         .path()
         .resolve("voice-runtime", BaseDirectory::Resource)
@@ -287,9 +292,17 @@ fn prepare_bundled_runtime(app: &AppHandle) -> Result<RuntimeLayout, String> {
     if ready_marker.is_file() {
         let layout = runtime_layout(destination, &manifest);
         validate_layout(&layout, &manifest)?;
+        cleanup_stale_runtimes(&data_dir, &manifest.runtime_id);
         return Ok(layout);
     }
 
+    VoiceService::emit(
+        app,
+        generation,
+        None,
+        "preparing",
+        "首次准备菲比声音：正在校验语音运行包…",
+    );
     let python_archive = resource_dir.join(&manifest.python_archive.file);
     let project_archive = resource_dir.join(&manifest.project_archive.file);
     verify_sha256(&python_archive, &manifest.python_archive.sha256)?;
@@ -304,6 +317,13 @@ fn prepare_bundled_runtime(app: &AppHandle) -> Result<RuntimeLayout, String> {
         fs::remove_dir_all(&staging).map_err(|_| "无法清理未完成的语音安装目录")?;
     }
     fs::create_dir_all(staging.join("python")).map_err(|_| "无法建立语音安装暂存目录")?;
+    VoiceService::emit(
+        app,
+        generation,
+        None,
+        "preparing",
+        "首次准备菲比声音：正在展开语音运行包（数 GB，可能需要几分钟）…",
+    );
     let install_result = (|| {
         extract_targz(&python_archive, &staging.join("python"))?;
         extract_targz(&project_archive, &staging)?;
@@ -324,7 +344,33 @@ fn prepare_bundled_runtime(app: &AppHandle) -> Result<RuntimeLayout, String> {
     fs::rename(&staging, &destination).map_err(|_| "无法完成内置语音运行环境安装")?;
     let layout = runtime_layout(destination, &manifest);
     validate_layout(&layout, &manifest)?;
+    cleanup_stale_runtimes(&data_dir, &manifest.runtime_id);
     Ok(layout)
+}
+
+/// Removes previous runtime expansions and stale partial installs, so old
+/// `runtime_id` directories do not accumulate (each is several GB).
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn cleanup_stale_runtimes(root: &Path, keep_id: &str) {
+    let Ok(reader) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in reader.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name == keep_id {
+            continue;
+        }
+        // Runtime ids look like `v1-macos-aarch64-<hash>-<hash>`; partial
+        // installs are `.installing-...`. Leave anything else untouched.
+        let known = (name.starts_with('v') && name.contains('-')) || name.starts_with(".installing-");
+        if !known {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
 }
 
 #[cfg(not(debug_assertions))]
@@ -383,7 +429,7 @@ fn clear_development_path_file(runtime_root: &Path) -> Result<(), String> {
 }
 
 #[cfg(debug_assertions)]
-fn prepare_bundled_runtime(_app: &AppHandle) -> Result<RuntimeLayout, String> {
+fn prepare_bundled_runtime(_app: &AppHandle, _generation: u64) -> Result<RuntimeLayout, String> {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let project = env::var_os("PHOEBE_GPTSOVITS_ROOT")
         .map(PathBuf::from)
@@ -430,6 +476,23 @@ fn reference_audio(_app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|_| "无法定位打包的菲比参考音频")?;
     if !path.is_file() {
         return Err("菲比参考音频缺失，请重新安装应用".into());
+    }
+    Ok(path)
+}
+
+/// The pre-recorded Phoebe birthday line, played directly (no TTS).
+fn birthday_audio(_app: &AppHandle) -> Result<PathBuf, String> {
+    #[cfg(debug_assertions)]
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../phoebe_voice_zh/wav")
+        .join(BIRTHDAY_NAME);
+    #[cfg(not(debug_assertions))]
+    let path = _app
+        .path()
+        .resolve(format!("voice/{BIRTHDAY_NAME}"), BaseDirectory::Resource)
+        .map_err(|_| "无法定位打包的生日祝福音频")?;
+    if !path.is_file() {
+        return Err("生日祝福音频缺失，请重新安装应用".into());
     }
     Ok(path)
 }
@@ -590,9 +653,24 @@ impl VoiceService {
             }
         }
         self.set_status("starting");
-        let layout = prepare_bundled_runtime(app)?;
+        let generation = self.generation.load(Ordering::SeqCst);
+        // Phase 1: make sure the runtime is expanded (long, first run only).
+        let layout = prepare_bundled_runtime(app, generation)?;
+        // Phase 2: spawn and wait for the model to load (short budget).
+        Self::emit(
+            app,
+            generation,
+            None,
+            "preparing",
+            "正在加载菲比语音模型（本机 CPU 推理，约需半分钟）…",
+        );
         self.spawn_server(app, &layout)?;
-        let deadline = Instant::now() + SERVER_START_TIMEOUT;
+        let log_path = self
+            .server
+            .lock()
+            .ok()
+            .and_then(|server| server.as_ref().map(|value| value.log_path.clone()));
+        let deadline = Instant::now() + SERVER_LOAD_TIMEOUT;
         while Instant::now() < deadline {
             if health_ready(Duration::from_secs(1)) {
                 self.set_status("ready");
@@ -622,17 +700,29 @@ impl VoiceService {
         }
         self.stop_managed_server();
         self.set_status("failed");
-        Err("内置 GPT-SoVITS 启动超时；文字回复仍可正常使用".into())
+        match log_path {
+            Some(log_path) => Err(format!(
+                "菲比语音模型加载超时；请查看日志：{}",
+                log_path.display()
+            )),
+            None => Err("菲比语音模型加载超时；文字回复仍可正常使用".into()),
+        }
     }
 
     pub fn prewarm(app: &AppHandle) {
         let handle = app.clone();
         thread::spawn(move || {
             let service = handle.state::<VoiceService>();
-            let status = if service.ensure_server(&handle).is_ok() {
-                "ready"
-            } else {
-                "failed"
+            let generation = service.generation.load(Ordering::SeqCst);
+            let status = match service.ensure_server(&handle) {
+                Ok(_) => {
+                    Self::emit(&handle, generation, None, "idle", "菲比语音已就绪");
+                    "ready"
+                }
+                Err(error) => {
+                    Self::emit(&handle, generation, None, "failed", error);
+                    "failed"
+                }
             };
             let _ = handle.emit("voice-status", status);
         });
@@ -682,7 +772,9 @@ impl VoiceService {
                 let _ = child.kill();
                 let _ = child.wait();
             }
-            let _ = fs::remove_file(playback.path);
+            if playback.remove_on_stop {
+                let _ = fs::remove_file(playback.path);
+            }
         }
     }
 
@@ -723,6 +815,76 @@ impl VoiceService {
             model: format!("GPT e15 · SoVITS e8 ({GPT_WEIGHT} · {SOVITS_WEIGHT})"),
             reference: REFERENCE_NAME,
         }
+    }
+
+    /// Plays the bundled birthday line directly, bypassing TTS synthesis.
+    pub fn play_clip(&self, app: &AppHandle, run_id: String, emotion: String, gesture: String) {
+        let path = match birthday_audio(app) {
+            Ok(path) => path,
+            Err(message) => {
+                let generation = self.generation.load(Ordering::SeqCst);
+                Self::emit(app, generation, Some(run_id), "failed", message);
+                return;
+            }
+        };
+        self.stop_playback();
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        Self::emit_with_cue(
+            app,
+            generation,
+            Some(run_id.clone()),
+            "speaking",
+            "菲比正在播放生日祝福",
+            Some(&emotion),
+            Some(&gesture),
+        );
+        let handle = app.clone();
+        thread::spawn(move || {
+            let service = handle.state::<VoiceService>();
+            let child = match spawn_player(&path) {
+                Ok(child) => Arc::new(Mutex::new(child)),
+                Err(message) => {
+                    Self::emit(&handle, generation, Some(run_id), "failed", message);
+                    return;
+                }
+            };
+            if service.generation.load(Ordering::SeqCst) != generation {
+                if let Ok(mut player) = child.lock() {
+                    let _ = player.kill();
+                }
+                return;
+            }
+            if let Ok(mut playback) = service.playback.lock() {
+                *playback = Some(Playback {
+                    generation,
+                    child: Arc::clone(&child),
+                    path: path.clone(),
+                    remove_on_stop: false,
+                });
+            }
+            loop {
+                if service.generation.load(Ordering::SeqCst) != generation {
+                    break;
+                }
+                let finished = child
+                    .lock()
+                    .ok()
+                    .and_then(|mut player| player.try_wait().ok().flatten())
+                    .is_some();
+                if finished {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            if service.generation.load(Ordering::SeqCst) == generation {
+                if let Ok(mut playback) = service.playback.lock() {
+                    if playback.as_ref().map(|value| value.generation) == Some(generation) {
+                        *playback = None;
+                    }
+                }
+                Self::emit(&handle, generation, Some(run_id), "idle", "生日祝福播放完成");
+            }
+        });
     }
 
     pub fn synthesize(
@@ -826,6 +988,7 @@ impl VoiceService {
                     generation,
                     child: Arc::clone(&child),
                     path: path.clone(),
+                    remove_on_stop: true,
                 });
             }
             Self::emit_with_cue(
@@ -915,9 +1078,27 @@ fn synthesize_wav(app: &AppHandle, text: &str) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        valid_runtime_component, validate_manifest, validate_wav, ArchiveResource,
-        VoiceRuntimeManifest, GPT_WEIGHT, REFERENCE_TEXT, SOVITS_WEIGHT, VOICE_RUNTIME_FORMAT,
+        cleanup_stale_runtimes, valid_runtime_component, validate_manifest, validate_wav,
+        ArchiveResource, VoiceRuntimeManifest, GPT_WEIGHT, REFERENCE_TEXT, SOVITS_WEIGHT,
+        VOICE_RUNTIME_FORMAT,
     };
+
+    #[test]
+    fn stale_runtime_dirs_are_removed_but_the_current_one_is_kept() {
+        let base = std::env::temp_dir().join(format!("phoebe-voice-clean-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("v1-macos-aarch64-old")).unwrap();
+        std::fs::create_dir_all(base.join("v1-macos-aarch64-new")).unwrap();
+        std::fs::create_dir_all(base.join(".installing-999-v1")).unwrap();
+        std::fs::create_dir_all(base.join("unrelated-notes")).unwrap();
+        cleanup_stale_runtimes(&base, "v1-macos-aarch64-new");
+        assert!(base.join("v1-macos-aarch64-new").is_dir());
+        assert!(!base.join("v1-macos-aarch64-old").exists());
+        assert!(!base.join(".installing-999-v1").exists());
+        // Unrelated directories are left alone.
+        assert!(base.join("unrelated-notes").is_dir());
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn baseline_voice_configuration_is_fixed() {

@@ -17,7 +17,8 @@ export const ALL_TOOL_NAMES = [...SAFE_DEFAULT_TOOLS, "open_url",
   "list_installed_apps", "launch_application", "focus_application", "reveal_file", "open_file_with_application",
   "browser_open", "browser_snapshot", "browser_click", "browser_type", "browser_select",
   "browser_wait", "browser_extract_text", "browser_close",
-  "remember_preference", "forget_preference", "launch_wuthering_waves"];
+  "remember_preference", "forget_preference", "launch_wuthering_waves",
+  "read_system_file", "write_system_file"];
 
 function unwrapSearchUrl(value) {
   try {
@@ -212,5 +213,11 @@ export function createAgentTools(options = {}) {
   brokerTool("launch_wuthering_waves", "启动鸣潮",
     "Launch the Wuthering Waves game client if it is installed. The user must approve the first launch; afterwards it can be trusted.",
     Type.Object({})),
+  brokerTool("read_system_file", "读取系统文件",
+    "Read a text file at an ABSOLUTE path anywhere on the system. Use only when the user asked for a specific path. Every call is confirmed, and sensitive locations (keys, credentials) are refused.",
+    Type.Object({ path: Type.String({ minLength: 1, maxLength: 4096 }) })),
+  brokerTool("write_system_file", "写入系统文件",
+    "Write text to a file at an ABSOLUTE path anywhere on the system (creating or overwriting). Use only when the user asked for a specific path. Every call is confirmed and shows a diff; sensitive locations are refused.",
+    Type.Object({ path: Type.String({ minLength: 1, maxLength: 4096 }), content: Type.String({ maxLength: 262144 }) })),
   ];
 }

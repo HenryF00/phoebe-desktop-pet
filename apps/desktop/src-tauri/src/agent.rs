@@ -182,6 +182,7 @@ struct ActiveRun {
     private_at_start: bool,
     allowed_tools: Vec<String>,
     mode: crate::settings::InteractionMode,
+    birthday: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -197,12 +198,27 @@ struct FileAttachment {
     content: String,
 }
 
+#[derive(Clone, Serialize)]
+struct ImageFrame {
+    #[serde(rename = "mimeType")]
+    mime_type: String,
+    /// Base64-encoded frame bytes (no data-URL prefix).
+    data: String,
+}
+
+#[derive(Clone, Serialize)]
+struct ImageAttachment {
+    name: String,
+    frames: Vec<ImageFrame>,
+}
+
 #[derive(Default)]
 pub struct AgentSupervisor {
     process: Arc<Mutex<Option<AgentProcess>>>,
     active: Arc<Mutex<Option<ActiveRun>>>,
     generation: Arc<AtomicU64>,
     file_attachment: Mutex<Option<FileAttachment>>,
+    image_attachment: Mutex<Option<ImageAttachment>>,
     usage: Arc<Mutex<TokenUsageSnapshot>>,
     context_usage: Arc<Mutex<ContextUsageSnapshot>>,
     /// Conversation currently loaded into the sidecar, keyed by interaction
@@ -288,11 +304,60 @@ impl AgentSupervisor {
         Ok(name)
     }
 
+    pub fn attach_image(
+        &self,
+        name: &str,
+        frames: Vec<(String, String)>,
+    ) -> Result<String, String> {
+        if self.is_busy() {
+            return Err("请先等待当前回复结束".into());
+        }
+        let name = name.trim();
+        if name.is_empty() || name.len() > 240 || name.chars().any(char::is_control) {
+            return Err("图片/视频名称无效".into());
+        }
+        if frames.is_empty() || frames.len() > 6 {
+            return Err("图片帧数无效（最多 6 帧）".into());
+        }
+        let mut total = 0usize;
+        let mut checked = Vec::with_capacity(frames.len());
+        for (mime_type, data) in frames {
+            if !matches!(mime_type.as_str(), "image/png" | "image/jpeg" | "image/webp") {
+                return Err("目前仅支持 PNG、JPEG 和 WebP 图像".into());
+            }
+            if data.is_empty()
+                || data.len() > 3_000_000
+                || !data
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '='))
+            {
+                return Err("图像数据无效或单帧过大".into());
+            }
+            total += data.len();
+            checked.push(ImageFrame { mime_type, data });
+        }
+        if total > 7_000_000 {
+            return Err("图像总大小过大（上限约 5 MB）".into());
+        }
+        *self
+            .image_attachment
+            .lock()
+            .map_err(|_| "图像授权状态不可用")? = Some(ImageAttachment {
+            name: name.to_owned(),
+            frames: checked,
+        });
+        Ok(name.to_owned())
+    }
+
     pub fn clear_attachments(&self) -> Result<(), String> {
         *self
             .file_attachment
             .lock()
             .map_err(|_| "文件授权状态不可用")? = None;
+        *self
+            .image_attachment
+            .lock()
+            .map_err(|_| "图片授权状态不可用")? = None;
         Ok(())
     }
 
@@ -319,6 +384,10 @@ impl AgentSupervisor {
             .effective_key()
             .map_err(str::to_owned)?
             .ok_or("DeepSeek 尚未在桌面核心中配置；文字对话不可用")?;
+        // Greet on the user's birthday once per day.
+        let today = crate::settings::today_month_day();
+        let is_birthday_greeting = settings.birthday.as_deref() == Some(today.as_str())
+            && settings.last_birthday_greeting.as_deref() != Some(today.as_str());
         let mut active = self.active.lock().map_err(|_| "Agent 状态不可用")?;
         if active.is_some() {
             return Err("请等待当前回复结束或先停止".into());
@@ -328,12 +397,18 @@ impl AgentSupervisor {
             .lock()
             .map_err(|_| "文件授权状态不可用")?
             .take();
+        let image = self
+            .image_attachment
+            .lock()
+            .map_err(|_| "图片授权状态不可用")?
+            .take();
         *active = Some(ActiveRun {
             run_id: run_id.to_owned(),
             question: text.to_owned(),
             private_at_start: settings.privacy_mode,
             allowed_tools: allowed_tools.clone(),
             mode: interaction_mode,
+            birthday: is_birthday_greeting,
         });
         drop(active);
         let usage_snapshot = {
@@ -343,7 +418,9 @@ impl AgentSupervisor {
         };
         let _ = app.emit("token-usage-changed", usage_snapshot);
 
-        self.seed_conversation(app, &key, &model, &search_proxy)?;
+        // Seeding history is best-effort: if the database is unavailable the
+        // conversation still proceeds, just without replayed history.
+        let _ = self.seed_conversation(app, &key, &model, &search_proxy);
 
         let result = self.write_command(
             app,
@@ -352,10 +429,17 @@ impl AgentSupervisor {
             &search_proxy,
             serde_json::json!({
                 "type": "prompt", "runId": run_id, "text": text, "memories": memories,
-                "file": file, "interactionMode": interaction_mode,
+                "file": file, "image": image, "interactionMode": interaction_mode,
+                "occasion": is_birthday_greeting.then_some("birthday"),
+                "userAddress": settings.user_address,
                 "tools": allowed_tools, "folderGrants": folder_grants
             }),
         );
+        if is_birthday_greeting && result.is_ok() {
+            let _ = app
+                .state::<crate::settings::SettingsStore>()
+                .mark_birthday_greeted(app, today);
+        }
         if result.is_err() {
             if let Ok(mut active) = self.active.lock() {
                 *active = None;
@@ -680,13 +764,24 @@ impl AgentSupervisor {
                         .map(|settings| settings.voice_enabled)
                         .unwrap_or(false)
                     {
-                        handle.state::<crate::voice::VoiceService>().synthesize(
-                            &handle,
-                            run.run_id.clone(),
-                            reply.speech_text.clone(),
-                            reply.emotion.clone(),
-                            reply.gesture.clone(),
-                        );
+                        let voice = handle.state::<crate::voice::VoiceService>();
+                        if run.birthday {
+                            // Play the bundled birthday line directly instead of TTS.
+                            voice.play_clip(
+                                &handle,
+                                run.run_id.clone(),
+                                reply.emotion.clone(),
+                                reply.gesture.clone(),
+                            );
+                        } else {
+                            voice.synthesize(
+                                &handle,
+                                run.run_id.clone(),
+                                reply.speech_text.clone(),
+                                reply.emotion.clone(),
+                                reply.gesture.clone(),
+                            );
+                        }
                     }
                 }
                 let _ = handle.emit("assistant-event", event);

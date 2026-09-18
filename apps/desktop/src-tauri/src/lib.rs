@@ -471,6 +471,8 @@ fn update_settings(
     voice_enabled: bool,
     interaction_mode: settings::InteractionMode,
     action_mode: settings::ActionMode,
+    birthday: Option<String>,
+    user_address: String,
 ) -> Result<settings::Settings, String> {
     require_caller(&window, "settings")?;
     let settings = app.state::<settings::SettingsStore>().update(
@@ -481,6 +483,8 @@ fn update_settings(
         voice_enabled,
         interaction_mode,
         action_mode,
+        birthday,
+        user_address,
     )?;
     if !settings.voice_enabled {
         app.state::<VoiceService>().stop(&app);
@@ -739,6 +743,28 @@ fn revoke_folder_grant(
     app.state::<tools::ToolBroker>().revoke_folder(&app, &grant_id)
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImageFrameInput {
+    mime_type: String,
+    data: String,
+}
+
+#[tauri::command]
+fn attach_agent_image(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    name: String,
+    frames: Vec<ImageFrameInput>,
+) -> Result<String, String> {
+    require_caller(&window, "chat")?;
+    let frames = frames
+        .into_iter()
+        .map(|frame| (frame.mime_type, frame.data))
+        .collect();
+    app.state::<AgentSupervisor>().attach_image(&name, frames)
+}
+
 #[tauri::command]
 fn clear_agent_attachments(
     window: tauri::WebviewWindow,
@@ -863,6 +889,7 @@ pub fn run() {
             list_folder_grants,
             revoke_folder_grant,
             clear_agent_attachments,
+            attach_agent_image,
             cancel_agent,
             get_chat_visibility,
             toggle_chat,

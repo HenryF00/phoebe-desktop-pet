@@ -37,7 +37,7 @@ type Conversation = { id: string; title: string; updatedAt: string; turnCount: n
 type ActiveConversation = { conversation: Conversation; turns: HistoryTurn[] };
 
 type InteractionMode = "assistant" | "chat";
-type DesktopSettings = { version: number; model: string; privacy_mode: boolean; search_proxy: string; voice_enabled: boolean; interaction_mode: InteractionMode; action_mode: ActionMode; pet_scale_percent: number };
+type DesktopSettings = { version: number; model: string; privacy_mode: boolean; search_proxy: string; voice_enabled: boolean; interaction_mode: InteractionMode; action_mode: ActionMode; pet_scale_percent: number; birthday: string | null; user_address: string };
 type QuickPreferences = Pick<DesktopSettings, "interaction_mode" | "voice_enabled" | "pet_scale_percent">;
 type TokenUsageSnapshot = { current: TokenUsage; session: TokenUsage };
 type AutostartStatus = { enabled: boolean; available: boolean };
@@ -45,13 +45,13 @@ type VoiceDiagnostic = { status: "ready" | "failed"; message: string; endpoint: 
 type VoiceEvent = {
   generation: number;
   runId?: string;
-  state: "synthesizing" | "speaking" | "idle" | "stopped" | "failed";
+  state: "preparing" | "synthesizing" | "speaking" | "idle" | "stopped" | "failed";
   message: string;
   emotion?: AssistantReply["emotion"];
   gesture?: AssistantReply["gesture"];
 };
 
-const defaultSettings: DesktopSettings = { version: 1, model: "deepseek-v4-flash", privacy_mode: false, search_proxy: "", voice_enabled: true, interaction_mode: "assistant", action_mode: "standard", pet_scale_percent: 100 };
+const defaultSettings: DesktopSettings = { version: 1, model: "deepseek-v4-flash", privacy_mode: false, search_proxy: "", voice_enabled: true, interaction_mode: "assistant", action_mode: "standard", pet_scale_percent: 100, birthday: null, user_address: "漂泊者" };
 const defaultQuickPreferences: QuickPreferences = { interaction_mode: "assistant", voice_enabled: true, pet_scale_percent: 100 };
 const emptyTokenUsage: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 };
 const defaultTokenUsage: TokenUsageSnapshot = { current: emptyTokenUsage, session: emptyTokenUsage };
@@ -85,6 +85,7 @@ const PlusIcon = () => <Icon><path d="M12 5v14M5 12h14" /></Icon>;
 const SendIcon = () => <Icon><path d="m5 12 14-7-4 14-3-6-7-1Z" /><path d="m12 13 7-8" /></Icon>;
 const StopIcon = () => <Icon><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none" /></Icon>;
 const FileIcon = () => <Icon><path d="M7 3h7l4 4v14H7z" /><path d="M14 3v5h5M10 13h5M10 17h5" /></Icon>;
+const ImageIcon = () => <Icon><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="8.5" cy="9.5" r="1.6" /><path d="m5 18 5-5 3.5 3.5L17 13l2 2" /></Icon>;
 const InfoIcon = () => <Icon><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7.5h.01" /></Icon>;
 const FolderIcon = () => <Icon><path d="M3 6h6l2 2h10v10H3z" /></Icon>;
 const ChevronDownIcon = () => <Icon><path d="m7 10 5 5 5-5" /></Icon>;
@@ -129,9 +130,79 @@ const toolLabels: Record<string, string> = {
   browser_wait: "等待页面加载",
   browser_extract_text: "提取页面文本",
   browser_close: "关闭受控浏览器",
+  read_system_file: "读取系统文件",
+  write_system_file: "写入系统文件",
   remember_preference: "保存偏好",
   forget_preference: "移除偏好",
 };
+
+function readAsDataURL(file: File | Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("read failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImageElement(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("image decode failed"));
+    image.src = src;
+  });
+}
+
+/** Draw any image/video source into a downscaled JPEG and return its base64. */
+function drawFrameJpeg(source: HTMLImageElement | HTMLVideoElement, maxEdge = 1536, quality = 0.9): string {
+  const sourceWidth = (source as HTMLVideoElement).videoWidth || (source as HTMLImageElement).naturalWidth || 1;
+  const sourceHeight = (source as HTMLVideoElement).videoHeight || (source as HTMLImageElement).naturalHeight || 1;
+  const scale = Math.min(1, maxEdge / Math.max(sourceWidth, sourceHeight));
+  const width = Math.max(1, Math.round(sourceWidth * scale));
+  const height = Math.max(1, Math.round(sourceHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("canvas unavailable");
+  context.drawImage(source, 0, 0, width, height);
+  return canvas.toDataURL("image/jpeg", quality).split(",")[1] ?? "";
+}
+
+async function framesFromImageFile(file: File): Promise<{ mimeType: string; data: string }[]> {
+  const image = await loadImageElement(await readAsDataURL(file));
+  return [{ mimeType: "image/jpeg", data: drawFrameJpeg(image) }];
+}
+
+async function framesFromVideoFile(file: File, count = 4): Promise<{ mimeType: string; data: string }[]> {
+  const url = URL.createObjectURL(file);
+  try {
+    const video = document.createElement("video");
+    video.muted = true;
+    video.preload = "auto";
+    video.src = url;
+    await new Promise<void>((resolve, reject) => {
+      video.onloadedmetadata = () => resolve();
+      video.onerror = () => reject(new Error("video load failed"));
+    });
+    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+    const frames: { mimeType: string; data: string }[] = [];
+    for (let index = 0; index < count; index++) {
+      const target = duration > 0 ? (duration * (index + 0.5)) / count : 0;
+      await new Promise<void>((resolve, reject) => {
+        const onSeeked = () => { video.removeEventListener("seeked", onSeeked); resolve(); };
+        video.addEventListener("seeked", onSeeked);
+        video.onerror = () => reject(new Error("video seek failed"));
+        video.currentTime = Math.min(Math.max(target, 0), Math.max(duration - 0.05, 0));
+      });
+      frames.push({ mimeType: "image/jpeg", data: drawFrameJpeg(video) });
+    }
+    return frames.length ? frames : [{ mimeType: "image/jpeg", data: drawFrameJpeg(video) }];
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 
 function MessageMarkdown({ children }: { children: string }) {
   return <Markdown
@@ -174,7 +245,8 @@ function SettingsApp() {
 
   const changed = draft.model !== saved.model || draft.privacy_mode !== saved.privacy_mode
     || draft.search_proxy !== saved.search_proxy || draft.voice_enabled !== saved.voice_enabled
-    || draft.interaction_mode !== saved.interaction_mode || draft.action_mode !== saved.action_mode;
+    || draft.interaction_mode !== saved.interaction_mode || draft.action_mode !== saved.action_mode
+    || (draft.birthday ?? "") !== (saved.birthday ?? "") || draft.user_address !== saved.user_address;
   dirtyRef.current = changed || memoryDirty || keyDirty;
   keyBusyRef.current = keyBusy;
   savedRef.current = saved;
@@ -259,6 +331,8 @@ function SettingsApp() {
         voiceEnabled: draft.voice_enabled,
         interactionMode: draft.interaction_mode,
         actionMode: draft.action_mode,
+        birthday: (draft.birthday ?? "").trim() || null,
+        userAddress: draft.user_address,
       });
       setSaved(next); setDraft(next); setLoadError(false);
       void refreshAudit();
@@ -353,7 +427,7 @@ function SettingsApp() {
 
   return <main className="settings-shell" onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); void closeSettings(); } }}>
     <section className="settings-card" aria-label="菲比助手设置">
-      <header className="settings-header"><div className="settings-brand"><span className="settings-avatar" aria-hidden="true"><img src="/pet/phoebe-orb-avatar-v1.png" alt="" /></span><div><p className="eyebrow">PHOEBE ASSISTANT · LOCAL SETTINGS</p><h1 ref={headingRef} tabIndex={-1}>设置</h1><p>模型、隐私和启动行为由桌面核心管理。</p></div></div>
+      <header className="settings-header"><div className="settings-brand"><span className="settings-avatar" aria-hidden="true"><img src="/pet/phoebe-avatar-v2.png" alt="" /></span><div><p className="eyebrow">PHOEBE ASSISTANT · LOCAL SETTINGS</p><h1 ref={headingRef} tabIndex={-1}>设置</h1><p>模型、隐私和启动行为由桌面核心管理。</p></div></div>
         <button ref={closeRef} className="settings-close" onClick={() => void closeSettings()} aria-label="关闭设置窗">完成</button></header>
       <div className="settings-body">
         {!inTauri && <p className="settings-callout">浏览器仅预览界面；保存与系统登录项需在桌面应用中操作。</p>}
@@ -365,8 +439,9 @@ function SettingsApp() {
             <select id="model" value={draft.model} onChange={event => setDraft(current => ({ ...current, model: event.target.value }))}>
               <option value="deepseek-v4-flash">DeepSeek V4 Flash · 默认</option>
               <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
+              <option value="deepseek-v4-flash-vision-exp">DeepSeek V4 Flash Vision · 支持图像识别</option>
             </select>
-            <p className="field-help">实验视觉模型暂不开放；文字对话下一轮起使用所选模型。</p>
+            <p className="field-help">图像识别需选择 Vision 模型；文字对话从下一轮起使用所选模型。</p>
             <p className="field-help">API Key 可在下方单独配置，不随模型和隐私设置保存到文件。</p>
           </fieldset>
           <fieldset className="settings-group" disabled={loading || saving}>
@@ -403,6 +478,17 @@ function SettingsApp() {
             <input id="search-proxy" type="url" value={draft.search_proxy} placeholder="http://127.0.0.1:7897" autoComplete="off" spellCheck={false}
               onChange={event => setDraft(current => ({ ...current, search_proxy: event.target.value }))} />
             <p className="field-help">直连可用时留空；若本机网络必须经过代理，填写已信任的本机 HTTP 代理地址。只允许 127.0.0.1 或 localhost，保存在本机应用数据目录，不上传到 GitHub。</p>
+          </fieldset>
+          <fieldset className="settings-group" disabled={loading || saving}>
+            <legend>个人</legend>
+            <label htmlFor="user-address">菲比对你的称呼</label>
+            <input id="user-address" type="text" value={draft.user_address} placeholder="漂泊者" maxLength={24} autoComplete="off" spellCheck={false}
+              onChange={event => setDraft(current => ({ ...current, user_address: event.target.value }))} />
+            <p className="field-help">默认“漂泊者”；菲比会在合适的场合这样称呼你，留空则使用默认。</p>
+            <label htmlFor="birthday">生日（可选）</label>
+            <input id="birthday" type="text" value={draft.birthday ?? ""} placeholder="MM-DD，例如 03-15" maxLength={5} autoComplete="off" spellCheck={false}
+              onChange={event => setDraft(current => ({ ...current, birthday: event.target.value }))} />
+            <p className="field-help">填写后，生日当天首次对话菲比会主动送上祝福（每天一次）。格式 MM-DD，留空关闭。</p>
           </fieldset>
         </form>
         <form className="key-form" onSubmit={saveKey}>
@@ -465,6 +551,7 @@ function ChatApp() {
   const [interactionMode, setInteractionMode] = React.useState<InteractionMode>("assistant");
   const [attachmentBusy, setAttachmentBusy] = React.useState(false);
   const [attachedFile, setAttachedFile] = React.useState("");
+  const [attachedImage, setAttachedImage] = React.useState("");
   const [attachmentNotice, setAttachmentNotice] = React.useState("");
   const [listenerReady, setListenerReady] = React.useState(false);
   const [draft, setDraft] = React.useState("");
@@ -492,6 +579,7 @@ function ChatApp() {
   const endRef = React.useRef<HTMLDivElement>(null);
   const bodyRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = React.useRef<HTMLInputElement>(null);
   const closeRef = React.useRef<HTMLButtonElement>(null);
   const privacyAnchorRef = React.useRef<HTMLDivElement>(null);
   const privacyTriggerRef = React.useRef<HTMLButtonElement>(null);
@@ -674,7 +762,7 @@ function ChatApp() {
   }, [privacyOpen]);
 
   const agentReady = status?.agent === "ready" && listenerReady;
-  const agentNotice = agentReady ? "文字对话已就绪。可联网搜索；文件需你主动附加到本轮对话，位置由系统原生定位按需获取。"
+  const agentNotice = agentReady ? "文字对话已就绪。可联网搜索；文件、图片/视频需你主动附加到本轮对话（图像需选用 Vision 模型），位置由系统原生定位按需获取。"
     : !inTauri ? "浏览器只显示界面预览；请启动桌面应用以连接 Agent。"
     : status?.agent === "failed" ? "系统安全存储暂不可用；请检查桌面环境。"
     : status?.agent === "ready" ? "Agent 事件连接未就绪；发送消息暂不可用。"
@@ -694,10 +782,33 @@ function ChatApp() {
     finally { setAttachmentBusy(false); }
   }
 
+  async function pickImage(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !inTauri || attachmentBusy || activeRunId) return;
+    setToolMenuOpen(false);
+    setAttachmentBusy(true); setAttachmentNotice("正在处理图片/视频…");
+    try {
+      const isVideo = file.type.startsWith("video/");
+      const frames = isVideo ? await framesFromVideoFile(file) : await framesFromImageFile(file);
+      const name = await invoke<string>("attach_agent_image", {
+        name: file.name || (isVideo ? "video" : "image"), frames,
+      });
+      setAttachedImage(name);
+      setAttachmentNotice(isVideo
+        ? "已从视频提取关键帧附加到下一轮；发送后才会交给 DeepSeek（需选用支持图像的模型）。"
+        : "图片已附加到下一轮对话；发送后才会交给 DeepSeek（需选用支持图像的模型）。");
+    } catch {
+      setAttachmentNotice("无法处理该图片/视频。请选择不超过 5 MB 的 PNG/JPEG/WebP，或常见格式的短视频。");
+    } finally {
+      setAttachmentBusy(false);
+    }
+  }
+
   async function clearAttachments() {
     if (!inTauri || activeRunId) return;
     try { await invoke("clear_agent_attachments");
-      setAttachedFile(""); setAttachmentNotice("已移除本轮附加的文件。");
+      setAttachedFile(""); setAttachedImage(""); setAttachmentNotice("已移除本轮附加内容。");
     } catch { setAttachmentNotice("移除附加内容失败，请重试。"); }
   }
 
@@ -838,7 +949,7 @@ function ChatApp() {
     setActiveRunId(runId);
     setAssistantState("thinking");
     setDraft("");
-    try { await invoke("prompt_agent", { runId, text }); setAttachedFile(""); setAttachmentNotice(""); }
+    try { await invoke("prompt_agent", { runId, text }); setAttachedFile(""); setAttachedImage(""); setAttachmentNotice(""); }
     catch {
       setMessages(current => current.map(entry => entry.runId === runId
         ? { ...entry, phase: "failed", error: "无法开始对话；请检查 Agent 配置后重试。" } : entry));
@@ -878,7 +989,7 @@ function ChatApp() {
 
   async function closeChat() {
     if (!inTauri) { location.search = "?view=pet"; return; }
-    try { await invoke("clear_agent_attachments"); setAttachedFile(""); await invoke("hide_chat"); }
+    try { await invoke("clear_agent_attachments"); setAttachedFile(""); setAttachedImage(""); await invoke("hide_chat"); }
     catch { setDraftError("无法收起聊天窗；请从托盘恢复或重启桌面应用。"); }
   }
 
@@ -910,7 +1021,7 @@ function ChatApp() {
   }}>
     <section className="chat-card" aria-label="菲比聊天面板">
       <header className="chat-header">
-        <span className="chat-avatar"><img src="/pet/phoebe-orb-avatar-v1.png" alt="" /></span>
+        <span className="chat-avatar"><img src="/pet/phoebe-avatar-v2.png" alt="" /></span>
         <div className="chat-identity"><h1>菲比 <span className={`mode-badge${interactionMode === "chat" ? " is-chat" : ""}`}>{interactionMode === "chat" ? "聊天" : "助手"}</span></h1><p><span className={`status-dot ${agentReady ? "is-ready" : ""}`} />{agentStatusLabel}</p></div>
         <div className="chat-header-actions">
           <button className="icon-button" type="button" onClick={() => { setHeaderMenuOpen(value => !value); setToolMenuOpen(false); setPrivacyOpen(false); }} aria-label="更多聊天选项" aria-expanded={headerMenuOpen}><MoreIcon /></button>
@@ -961,7 +1072,7 @@ function ChatApp() {
 
       <div ref={bodyRef} className="chat-body" onScroll={handleBodyScroll}>
         {messages.length === 0 && <div className="empty-chat">
-          <div className="empty-avatar"><img src="/pet/phoebe-orb-avatar-v1.png" alt="" /></div>
+          <div className="empty-avatar"><img src="/pet/phoebe-avatar-v2.png" alt="" /></div>
           <h2>{interactionMode === "chat" ? "想和我聊点什么？" : "今天想一起做什么？"}</h2>
           <p>{agentReady ? (interactionMode === "chat" ? "我在聊天模式：回答会更简短、更亲近，并完整朗读。" : "我可以聊天、联网搜索，也能在你授权后读取文本文件或获取一次设备位置。") : agentNotice}</p>
           {agentReady && <div className="suggestion-list" aria-label="建议问题">
@@ -984,7 +1095,7 @@ function ChatApp() {
             <article className="exchange">
               <div className="message-row is-user"><div className="message-user">{entry.question}</div></div>
               <div className="assistant-turn">
-                <div className="speaker-label"><span className="speaker-avatar"><img src="/pet/phoebe-orb-avatar-v1.png" alt="" /></span><span>菲比</span></div>
+                <div className="speaker-label"><span className="speaker-avatar"><img src="/pet/phoebe-avatar-v2.png" alt="" /></span><span>菲比</span></div>
                 {entry.tool && <details className={`tool-event is-${entry.tool.status}`} open={entry.tool.status === "running"}>
                   <summary><span className="tool-event-icon"><ToolIcon /></span><span>{toolLabels[entry.tool.name] ?? "使用工具"}</span><span className="tool-event-state">{entry.tool.status === "running" ? "进行中" : entry.tool.status === "success" || entry.tool.status === "already_running" ? "已完成" : "需注意"}</span><ChevronDownIcon /></summary>
                   {entry.tool.message && <p>{entry.tool.message}</p>}
@@ -1013,17 +1124,20 @@ function ChatApp() {
           <span>{voiceEvent.message}</span>
           {(voiceEvent.state === "synthesizing" || voiceEvent.state === "speaking") && <button type="button" onClick={() => void stopVoice()}>停止语音</button>}
         </div>}
-        {attachedFile && <div className="attachment-chips" aria-label="本轮已附加内容">
-          <span><FileIcon />{attachedFile}</span>
+        {(attachedFile || attachedImage) && <div className="attachment-chips" aria-label="本轮已附加内容">
+          {attachedFile && <span><FileIcon />{attachedFile}</span>}
+          {attachedImage && <span><ImageIcon />{attachedImage}</span>}
           <button type="button" onClick={() => void clearAttachments()} disabled={Boolean(activeRunId)} aria-label="移除本轮附加内容"><CloseIcon /></button>
         </div>}
         {attachmentNotice && <p className="composer-notice" role="status" aria-live="polite">{attachmentNotice}</p>}
         {!agentReady && <p className="composer-notice is-warning">{agentNotice}</p>}
         <div className="composer">
           <div className="composer-menu-anchor">
-            <button className="composer-icon-button" type="button" onClick={() => { setToolMenuOpen(value => !value); setHeaderMenuOpen(false); setPrivacyOpen(false); }} disabled={!inTauri || attachmentBusy || Boolean(activeRunId)} aria-label="添加文件或授权文件夹" aria-expanded={toolMenuOpen}><PlusIcon /></button>
+            <input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime,video/webm" onChange={pickImage} hidden />
+            <button className="composer-icon-button" type="button" onClick={() => { setToolMenuOpen(value => !value); setHeaderMenuOpen(false); setPrivacyOpen(false); }} disabled={!inTauri || attachmentBusy || Boolean(activeRunId)} aria-label="添加文件、图片或授权文件夹" aria-expanded={toolMenuOpen}><PlusIcon /></button>
             {toolMenuOpen && <div className="chat-popover tool-menu">
               <button type="button" onClick={() => void chooseFile()}><FileIcon /><span><strong>选择文本文件</strong><small>仅授权本轮读取</small></span></button>
+              <button type="button" onClick={() => imageInputRef.current?.click()} disabled={attachmentBusy}><ImageIcon /><span><strong>附加图片/视频</strong><small>PNG/JPEG/WebP 或短视频</small></span></button>
               <button type="button" onClick={() => void chooseFolder(false)} disabled={grantBusy}><FolderIcon /><span><strong>授权文件夹（只读）</strong><small>{grantBusy ? "正在选择…" : grants.length ? `已授权 ${grants.length} 个` : "可随时撤销"}</small></span></button>
               <button type="button" onClick={() => void chooseFolder(true)} disabled={grantBusy}><FolderIcon /><span><strong>授权文件夹（可读写）</strong><small>写入与删除仍需逐次确认</small></span></button>
             </div>}
@@ -1043,7 +1157,7 @@ function ChatApp() {
                 <button ref={privacyCloseRef} className="privacy-close" type="button" aria-label="关闭工具与隐私说明"
                   onClick={() => { privacyRestoreFocusRef.current = true; setPrivacyOpen(false); }}><CloseIcon /></button>
               </div>
-              <p>搜索词会发送给搜索服务；文件仅在你主动附加并调用工具时发送给 DeepSeek，本轮结束后即从 Agent 上下文清除。位置由系统原生定位一次性获取，仅在你请求时读取。</p>
+              <p>搜索词会发送给搜索服务；文件、图片/视频仅在你主动附加并发送后才会交给 DeepSeek（图像需选用 Vision 模型；视频会抽取少量关键帧），本轮结束后图片不再随上下文重发。位置由系统原生定位一次性获取，仅在你请求时读取。</p>
             </div>}
           </div>
           {activeRunId ? <button type="button" className="composer-action is-stop" onClick={stopMessage} aria-label="停止生成"><StopIcon /></button>
@@ -1135,7 +1249,7 @@ function QuickMenu({ chatVisible, preferences, usage, contextUsage, preferenceBu
       {PET_SCALE_PRESETS.map(preset => <button type="button" role="menuitemradio" aria-checked={preferences.pet_scale_percent === preset.value}
         className={`${preferences.pet_scale_percent === preset.value ? "is-selected" : ""}${preset.value === 0 ? " is-iconized-option" : ""}`} disabled={preferenceBusy} key={preset.value} onClick={() => onScale(preset.value)}
         title={preset.value === 0 ? "收起全身立绘，显示为圆形头像" : `桌宠缩放到 ${preset.label}`}>
-        {preset.value === 0 && <img src="/pet/phoebe-orb-avatar-v1.png" alt="" aria-hidden="true" />}
+        {preset.value === 0 && <img src="/pet/phoebe-avatar-v2.png" alt="" aria-hidden="true" />}
         <span>{preset.label}</span>
       </button>)}
     </div>
@@ -1471,7 +1585,7 @@ function PetApp() {
           if (inTauri) void invoke("show_pet_menu").catch(() => setNotice("无法打开快捷菜单，请从托盘重试。"));
           else setMenuOpen(true);
         }}>
-        <span className="pet-orb" aria-hidden="true"><img src="/pet/phoebe-orb-avatar-v1.png" alt="" draggable={false} /></span>
+        <span className="pet-orb" aria-hidden="true"><img src="/pet/phoebe-avatar-v2.png" alt="" draggable={false} /></span>
         <span className="pet-animation" aria-hidden="true">
           <img className="pet-animation-frame" src={petAnimation.src} alt="" draggable={false} />
         </span>

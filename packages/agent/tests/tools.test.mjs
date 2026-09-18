@@ -35,7 +35,8 @@ test("file tools expose the current attachment; location goes through the broker
       "list_installed_apps", "launch_application", "focus_application", "reveal_file", "open_file_with_application",
       "browser_open", "browser_snapshot", "browser_click", "browser_type", "browser_select",
       "browser_wait", "browser_extract_text", "browser_close",
-      "remember_preference", "forget_preference", "launch_wuthering_waves"]);
+      "remember_preference", "forget_preference", "launch_wuthering_waves",
+      "read_system_file", "write_system_file"]);
   await assert.rejects(tools[1].execute("x", {}), /尚未/);
   // get_device_location is a broker tool now, so without a requestTool it fails closed.
   await assert.rejects(tools[2].execute("x", {}), /未向 Agent 注册/);

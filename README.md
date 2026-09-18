@@ -1,6 +1,6 @@
 # 菲比助手 · Phoebe Assistant
 
-> **ver0.8** · 基于 Tauri 2、React 和 Pi Agent 的本机 AI 桌面宠物与受控本机操作 Agent
+> **ver0.9** · 基于 Tauri 2、React 和 Pi Agent 的本机 AI 桌面宠物与受控本机操作 Agent
 
 <p align="center">
   <img src="apps/desktop/public/pet/phoebe-orb-avatar-v1.png" width="152" alt="菲比助手头像">
@@ -8,11 +8,18 @@
 
 菲比助手是一个桌面常驻角色与本机 AI Agent 结合的实验项目。它使用透明置顶窗口展示可动的菲比桌宠，通过独立聊天窗口连接 DeepSeek，并在本机管理 API Key、对话历史、显式记忆和 GPT-SoVITS 语音。
 
-从 ver0.3 起，菲比不再只是聊天：所有操作系统操作统一经过 Rust 权限网关（Node Sidecar 只提交请求，Rust 独立校验并执行），可以在用户授权目录内受控地读取、写入、移动和删除文件，并加入了按 Token 预算的上下文管理，避免长时间会话把上下文喂爆。ver0.4 进一步接入应用与文件操作：可以枚举已安装应用、启动或切换应用，并在文件管理器中显示或用指定应用打开授权目录内的文件——全程仍由同一个权限网关审批。ver0.5 补齐了真正的多会话：会话列表、新建／切换／重命名／删除，消息按会话隔离，切换时把该会话的文本历史重新灌回模型上下文，可以接着聊。ver0.6 进一步把会话按**交互模式**隔离：助手模式与聊天模式各自有独立的会话列表与模型上下文，切回模式能接着上一段聊，不会串味；两个模式的聊天窗口也有不同的视觉主题与空状态提示。ver0.7 接入**受控浏览器（Phase 4）**：独立的 Browser Sidecar 用 playwright-core 驱动本机 Chrome/Edge 无头实例，可以打开网页、读取快照、点击、输入、选择、等待和提取文本，全部走同一个 Rust 审批网关。ver0.8 把**长期记忆升级为 Agent 工具授权链**：模型可以提议保存（`remember_preference`）或删除（`forget_preference`）偏好，但要经用户逐次确认与敏感词校验；新增绑定目标的 `launch_wuthering_waves` 鸣潮启动工具；并为长对话加了**会话摘要**，超预算时把早期消息压缩为结构化检查点摘要而非直接丢弃。
+从 ver0.3 起，菲比不再只是聊天：所有操作系统操作统一经过 Rust 权限网关（Node Sidecar 只提交请求，Rust 独立校验并执行），可以在用户授权目录内受控地读取、写入、移动和删除文件，并加入了按 Token 预算的上下文管理，避免长时间会话把上下文喂爆。ver0.4 进一步接入应用与文件操作：可以枚举已安装应用、启动或切换应用，并在文件管理器中显示或用指定应用打开授权目录内的文件——全程仍由同一个权限网关审批。ver0.5 补齐了真正的多会话：会话列表、新建／切换／重命名／删除，消息按会话隔离，切换时把该会话的文本历史重新灌回模型上下文，可以接着聊。ver0.6 进一步把会话按**交互模式**隔离：助手模式与聊天模式各自有独立的会话列表与模型上下文，切回模式能接着上一段聊，不会串味；两个模式的聊天窗口也有不同的视觉主题与空状态提示。ver0.7 接入**受控浏览器（Phase 4）**：独立的 Browser Sidecar 用 playwright-core 驱动本机 Chrome/Edge 无头实例，可以打开网页、读取快照、点击、输入、选择、等待和提取文本，全部走同一个 Rust 审批网关。ver0.8 把**长期记忆升级为 Agent 工具授权链**：模型可以提议保存（`remember_preference`）或删除（`forget_preference`）偏好，但要经用户逐次确认与敏感词校验；新增绑定目标的 `launch_wuthering_waves` 鸣潮启动工具；并为长对话加了**会话摘要**，超预算时把早期消息压缩为结构化检查点摘要而非直接丢弃。ver0.9 加入**图像/视频多模态识别**（附加图片；视频自动抽帧，需选用支持图像的模型）与**系统级文档读写**（`read_system_file` / `write_system_file`，按绝对路径、逐次确认、屏蔽敏感位置）。
 
 ver0.7 当前以 **macOS Apple Silicon** 为主要验收环境；代码保留 Windows 适配，但尚未完成 Windows 实机验收。
 
 ## 已实现功能
+
+### ver0.9 新增
+
+- **图像/视频多模态识别**：聊天窗可附加 PNG/JPEG/WebP 图片，或短视频（前端自动抽取若干关键帧）；图像作为多模态内容交给模型，需在设置里选择 `DeepSeek V4 Flash Vision` 模型。图片在前端下采样压缩，发送后不会随上下文重复发送。
+- **系统级文档读写**：新增 `read_system_file` / `write_system_file`，模型可用**绝对路径**读写系统任意位置的文本文件（如“把总结保存到 ~/Desktop/report.md”）。每次调用都逐次确认并展示绝对路径（写入还展示 diff）；`.ssh`、钥匙串、`.env` 等敏感位置即使指定也被拒绝。
+- **自定义称呼**：设置里可填菲比对你的称呼（默认「漂泊者」，留空恢复默认）；名称会作为数据注入系统提示，仅在合适场合自然使用。
+- **生日祝福**：设置里可填生日（`MM-DD`）；生日当天首次对话，菲比会主动送上祝福并切换为开心表情，每天只祝福一次（用本机日期去重）。生日语音**直接播放内置的「017 生日祝福」预录音频**（菲比原声），不再现场合成。
 
 ### ver0.8 新增
 
@@ -123,19 +130,28 @@ ver0.7 当前以 **macOS Apple Silicon** 为主要验收环境；代码保留 Wi
 - DeepSeek API Key
 - 仅发布构建者需要：目标平台上的 GPT-SoVITS Conda 环境、e15/e8 权重和 `conda-pack`
 
+平台差异：
+
+- **macOS**：需要 Xcode Command Line Tools（`xcode-select --install`）。
+- **Windows**：需要 **Visual Studio Build Tools（C++ 桌面开发）** 和 [WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)（Win10 21H2+ / Win11 已自带）。
+
 ### 安装依赖
 
 ```sh
 npm ci
 ```
 
-### 启动桌面应用
+### 启动桌面应用（开发模式）
 
 ```sh
+npm ci            # 或 npm install
 npm run desktop:dev
 ```
 
 启动后，右键菲比 → **打开设置** → 保存 DeepSeek API Key，再单击桌宠打开聊天。
+
+- **macOS**：装好 Xcode Command Line Tools 后直接运行即可。
+- **Windows**：先装好 Visual Studio Build Tools 与 WebView2，再运行同样的命令（`npm run desktop:dev`）。
 
 ### 浏览器 UI 预览
 
@@ -169,6 +185,15 @@ release 构建会打包固定的 Node Sidecar、编译后的 Agent、Node 许可
 
 macOS 构建产出 `.app` 和压缩 DMG；Windows 构建产出 NSIS 安装程序。语音运行包包含原生依赖，必须分别在 macOS Apple Silicon 和目标 Windows x64 机器上构建，不能把 macOS 归档直接用于 Windows。
 
+### 打包与安装（按平台）
+
+提供一键打包脚本（自动检查工具链与 GPT-SoVITS 输入后打包）：
+
+- **macOS（Apple Silicon）**：`./scripts/build-macos.sh`，产物为 `target/release/bundle/macos/Phoebe Assistant.app` 与 DMG；双击 `.app` 即可运行（未签名/未公证的本地验收包，首次打开可能需右键「打开」）。
+- **Windows x64**：`powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1`，产物为 `target/release/bundle/nsis/*-setup.exe`；脚本会自动生成 Windows 语音包（语音运行包是平台专属，不能复用 macOS 的）。完整步骤见 [Windows 打包与验收清单](docs/windows-release.md)。
+
+也可以手动执行：macOS `npm run tauri:build -w @phoebe/desktop`；Windows 需先设置 `PHOEBE_GPTSOVITS_ROOT` / `PHOEBE_GPTSOVITS_ENV` 再执行同一条命令。
+
 ## 项目结构
 
 ```text
@@ -184,7 +209,20 @@ phoebe_voice_zh/              语音元数据与打包所需的单段参考音�
 
 当前菲比桌面应用的入口是 `apps/desktop`。
 
-## ver0.8 已知边界
+## 尚未完成的功能
+
+- **语音输入**：按住说话、麦克风录音、ASR（本地 Whisper，macOS 用 mlx-whisper / Windows 用 faster-whisper 或 whisper.cpp）、流式/分句 TTS 队列、逐句表情切换、免提抢话与回声消除。
+- **发布版语音包精简**：当前语音运行包打包了整个 Conda 环境（含训练、WebUI、开发工具与未参与推理的 Python 包），未做裁剪。
+- **Phase 5 辅助功能 / 截屏 / Shell**：屏幕录制、键鼠辅助功能（Accessibility / UI Automation）、受限 Shell 命令。依赖生产签名/公证后系统权限才稳定。
+- **自动更新**：macOS / Windows 应用自更新。
+- **自动清理旧运行包**：语音运行时更新后，旧的 4～5 GB 展开目录不会自动清理。
+- **稳定显示器标识**：同型号多屏场景下重启恢复到正确屏幕。
+- **Windows 发布**：Windows x64 语音包生成、NSIS 实机打包与验收（清单见 [docs/windows-release.md](docs/windows-release.md)）。
+- **生产签名 / 公证**：Apple Developer ID 签名 + 公证（仅自用或朋友小范围使用可不做）。
+
+更完整的优化点、收益与优先级见 [改进计划](docs/phoebe-improvement-plan.md)。
+
+## ver0.9 已知边界
 
 - 尚未完成 Apple Developer ID 签名、公证和自动更新。
 - Windows 构建与 Credential Manager 需要进一步实机验收。

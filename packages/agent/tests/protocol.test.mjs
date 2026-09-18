@@ -4,7 +4,7 @@ import { parseCommand, encodeEvent } from "../src/protocol.mjs";
 
 test("valid commands preserve only internal fields", () => {
   assert.deepEqual(parseCommand('{"type":"prompt","runId":"r1","text":"你好","shell":"rm"}'),
-    { type: "prompt", runId: "r1", text: "你好", interactionMode: "assistant", memories: [], file: null });
+    { type: "prompt", runId: "r1", text: "你好", interactionMode: "assistant", memories: [], file: null, image: null, occasion: null, userAddress: "" });
   assert.deepEqual(parseCommand('{"type":"cancel","runId":"r1"}'), { type: "cancel", runId: "r1" });
 });
 
@@ -12,7 +12,7 @@ test("invalid and dangerous commands are rejected", () => {
   assert.throws(() => parseCommand('{"type":"exec","command":"pwd"}'));
   assert.throws(() => parseCommand('{"type":"prompt","runId":"r1","text":""}'));
   assert.deepEqual(parseCommand('{"type":"prompt","runId":"r1","text":"x","tools":["bash"]}'),
-    { type: "prompt", runId: "r1", text: "x", interactionMode: "assistant", memories: [], file: null });
+    { type: "prompt", runId: "r1", text: "x", interactionMode: "assistant", memories: [], file: null, image: null, occasion: null, userAddress: "" });
   assert.throws(() => parseCommand('{"type":"prompt","runId":"r1","text":"x","interactionMode":"admin"}'));
 });
 
@@ -93,6 +93,47 @@ test("folder grants are bounded and stripped to approved fields", () => {
     folderGrants: [{ grantId: "short", label: "x", read: true, write: false }] })));
   const withoutGrants = parseCommand('{"type":"prompt","runId":"r1","text":"x"}');
   assert.equal("folderGrants" in withoutGrants, false);
+});
+
+test("birthday occasion is parsed and defaults to null", () => {
+  assert.equal(parseCommand('{"type":"prompt","runId":"r1","text":"x"}').occasion, null);
+  assert.equal(
+    parseCommand('{"type":"prompt","runId":"r1","text":"x","occasion":"birthday"}').occasion,
+    "birthday",
+  );
+  assert.equal(
+    parseCommand('{"type":"prompt","runId":"r1","text":"x","occasion":"other"}').occasion,
+    null,
+  );
+});
+
+test("user address is trimmed and bounded", () => {
+  assert.equal(parseCommand('{"type":"prompt","runId":"r1","text":"x"}').userAddress, "");
+  assert.equal(
+    parseCommand('{"type":"prompt","runId":"r1","text":"x","userAddress":"  小芳 "}').userAddress,
+    "小芳",
+  );
+  assert.throws(() =>
+    parseCommand(JSON.stringify({ type: "prompt", runId: "r1", text: "x", userAddress: "x".repeat(25) })),
+  );
+  assert.throws(() =>
+    parseCommand(JSON.stringify({ type: "prompt", runId: "r1", text: "x", userAddress: "a\nb" })),
+  );
+});
+
+test("image attachments are validated and bounded", () => {
+  const frame = { mimeType: "image/jpeg", data: "aGVsbG8=" };
+  const parsed = parseCommand(JSON.stringify({ type: "prompt", runId: "r1", text: "看这张图",
+    image: { name: "shot.png", frames: [frame] } }));
+  assert.deepEqual(parsed.image,
+    { name: "shot.png", frames: [{ mimeType: "image/jpeg", data: "aGVsbG8=" }] });
+  assert.equal(parseCommand('{"type":"prompt","runId":"r1","text":"x"}').image, null);
+  assert.throws(() => parseCommand(JSON.stringify({ type: "prompt", runId: "r1", text: "x",
+    image: { name: "x", frames: [{ mimeType: "image/gif", data: "aGVsbG8=" }] } })));
+  assert.throws(() => parseCommand(JSON.stringify({ type: "prompt", runId: "r1", text: "x",
+    image: { name: "x", frames: [] } })));
+  assert.throws(() => parseCommand(JSON.stringify({ type: "prompt", runId: "r1", text: "x",
+    image: { name: "x", frames: Array(7).fill(frame) } })));
 });
 
 test("conversation seeding accepts only user/assistant text pairs", () => {

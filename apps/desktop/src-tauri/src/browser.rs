@@ -93,12 +93,25 @@ impl BrowserService {
         Ok(result)
     }
 
-    /// Shuts the sidecar down, closing the browser it owns.
+    /// Shuts the sidecar down, closing the browser it owns. Sends a graceful
+    /// `close` first so the sidecar can shut Chrome down, then force-kills if
+    /// it does not exit in time.
     pub fn shutdown(&self) {
         if let Ok(mut guard) = self.inner.lock() {
             if let Some(mut process) = guard.take() {
-                let _ = process.child.kill();
-                let _ = process.child.wait();
+                let _ = process.write_line("{\"type\":\"close\",\"requestId\":\"shutdown\"}");
+                let deadline = std::time::Instant::now() + Duration::from_millis(1500);
+                loop {
+                    if process.child.try_wait().ok().flatten().is_some() {
+                        break;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        let _ = process.child.kill();
+                        let _ = process.child.wait();
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
             }
         }
     }

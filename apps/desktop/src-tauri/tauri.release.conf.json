@@ -24,7 +24,8 @@
       "resources/voice-runtime/python-env.tar.gz": "voice-runtime/python-env.tar.gz",
       "resources/voice-runtime/gpt-sovits.tar.gz": "voice-runtime/gpt-sovits.tar.gz",
       "resources/voice-runtime/GPT-SoVITS-LICENSE": "voice-runtime/GPT-SoVITS-LICENSE",
-      "../../../phoebe_voice_zh/wav/021_自我介绍.wav": "voice/021_自我介绍.wav"
+      "../../../phoebe_voice_zh/wav/021_自我介绍.wav": "voice/021_自我介绍.wav",
+      "../../../phoebe_voice_zh/wav/017_生日祝福.wav": "voice/017_生日祝福.wav"
     }
   }
 }
